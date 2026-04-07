@@ -1,0 +1,18 @@
+export const ACTIVE_ROUTES = [
+  "GET /",
+  "GET /health",
+  "GET /bindings",
+  "GET /worldstate/buckets",
+  "GET /worldstate/split",
+  "GET /worldstate/cache-plan",
+  "POST /worldstate/push",
+  "GET /worldstate/status",
+  "GET /worldstate/stats",
+  "GET /worldstate/stats/daily",
+  "GET /worldstate/push-candidates",
+  "GET /debug/queue/index",
+  "GET /debug/r1/index",
+  "GET /debug/r2/index",
+  "GET /debug/kv/index",
+  "GET /debug/d1/index",
+] as const;
