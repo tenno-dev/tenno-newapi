@@ -112,10 +112,17 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
   app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 
   app.get("/", (c) => {
+    const publicRoutes = ACTIVE_ROUTES.filter(
+      (entry) =>
+        !entry.includes(" /debug") &&
+        !entry.includes(" /debug-public") &&
+        !entry.includes(" /internal/")
+    );
+
     return c.json({
       ok: true,
       message: "Active routes",
-      routes: ACTIVE_ROUTES,
+      routes: publicRoutes,
     });
   });
 
