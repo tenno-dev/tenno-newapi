@@ -50,7 +50,7 @@ export const FILE_MATCH_ORDER: Record<TranslationFileName, MatchCandidate[]> = {
   eventsData: ["topKey", "name", "regex"],
   factionsData: ["topKey", "name", "regex"],
   fissureModifiers: ["topKey", "name", "regex"],
-  languages: ["topKey"],
+  languages: ["name", "regex", "topKey"],
   missionTypes: ["topKey"],
   operationTypes: ["topKey"],
   persistentEnemyData: ["name", "topKey", "regex"],
