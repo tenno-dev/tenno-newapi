@@ -48,6 +48,10 @@ export function buildCurrentRootPayloadKey(rootKey: string): string {
   return `${CACHE_NAMESPACE}:root:${rootKey}:current`;
 }
 
+export function buildCurrentRootCursorKey(rootKey: string): string {
+  return `${CACHE_NAMESPACE}:root:${rootKey}:current:cursor`;
+}
+
 export function buildLastKnownRootPayloadKey(rootKey: string): string {
   return `${CACHE_NAMESPACE}:root:${rootKey}:last-known`;
 }
@@ -62,4 +66,8 @@ export function buildTranslatedRootKey(rootKey: string, lang: string, runId: str
 
 export function buildCurrentTranslatedRootKey(rootKey: string, lang: string): string {
   return `${CACHE_NAMESPACE}:root:${rootKey}:translated:${lang}:current`;
+}
+
+export function buildCurrentTranslatedRootCursorKey(rootKey: string, lang: string): string {
+  return `${CACHE_NAMESPACE}:root:${rootKey}:translated:${lang}:current:cursor`;
 }

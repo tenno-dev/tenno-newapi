@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { AppEnv } from "../app/types";
 import { buildCurrentTranslatedRootKey, buildTranslatedRootKey } from "../cache/keys";
+import { SQL } from "../db/sql";
+import { ensureDiffTables, ensureQueueTables } from "../pipeline/retention";
 import {
   getWorldStateDailyStats,
   getWorldStateStats,
@@ -73,6 +75,115 @@ function filterEventMessagesToLang(data: unknown, lang: string): unknown {
   return result;
 }
 
+type PipelineRunRow = {
+  runId: string;
+  fetchedAt: string;
+  sourceVersion: string | null;
+  changedCount: number;
+  dryRun: number;
+  queuedCount: number;
+  executionStatus: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+};
+
+type QueueLogRow = {
+  id: number;
+  rootKey: string;
+  status: string;
+  error: string | null;
+  createdAt?: string;
+};
+
+function parseDbTimestampMs(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const ms = Date.parse(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function summarizeRunQueue(run: PipelineRunRow | null, queueRows: QueueLogRow[], queuedKeys: string[]) {
+  const latestByRootKey = new Map<string, { status: string; error: string | null }>();
+
+  for (const row of queueRows) {
+    if (!latestByRootKey.has(row.rootKey)) {
+      latestByRootKey.set(row.rootKey, {
+        status: row.status,
+        error: row.error,
+      });
+    }
+  }
+
+  let processed = 0;
+  let failed = 0;
+
+  for (const row of latestByRootKey.values()) {
+    if (row.status === "processed") {
+      processed += 1;
+    } else if (row.status === "failed") {
+      failed += 1;
+    }
+  }
+
+  const queued = Math.max(Number(run?.queuedCount ?? queuedKeys.length ?? latestByRootKey.size), 0);
+  const known = processed + failed;
+  const pending = Math.max(queued - known, 0);
+  const progress = queued > 0 ? Math.min(1, processed / queued) : 0;
+  let status = run?.executionStatus ?? (pending > 0 ? "running" : failed > 0 ? "failed" : "completed");
+  if (status === "queued" && known > 0) {
+    status = pending > 0 ? "running" : failed > 0 ? "failed" : "completed";
+  }
+  if ((status === "running" || status === "queued") && known > 0 && pending === 0) {
+    status = failed > 0 ? "failed" : "completed";
+  }
+  const isActive = status === "running" || status === "queued";
+
+  const queueTimes = queueRows
+    .map((row) => parseDbTimestampMs(row.createdAt))
+    .filter((ms): ms is number => ms !== null);
+
+  const startedAtMs =
+    parseDbTimestampMs(run?.startedAt) ??
+    (queueTimes.length > 0
+      ? Math.min(...queueTimes)
+      : (parseDbTimestampMs(run?.createdAt) ?? parseDbTimestampMs(run?.fetchedAt) ?? null));
+  const endedAtMs =
+    parseDbTimestampMs(run?.completedAt) ?? (!isActive && queueTimes.length > 0 ? Math.max(...queueTimes) : null);
+  const startedAt = startedAtMs === null ? null : new Date(startedAtMs).toISOString();
+  const activeDurationSec =
+    startedAtMs === null
+      ? null
+      : Math.max(
+          0,
+          Math.floor(((isActive ? Date.now() : endedAtMs ?? Date.now()) - startedAtMs) / 1000)
+        );
+  const endedAt = endedAtMs === null ? null : new Date(endedAtMs).toISOString();
+
+  const errorRootKeys = Array.from(latestByRootKey.entries())
+    .filter(([, row]) => row.status === "failed")
+    .map(([rootKey, row]) => ({ rootKey, error: row.error ?? "unknown error" }));
+
+  return {
+    queued,
+    queuedKeys,
+    queuedKeysCount: queuedKeys.length,
+    processed,
+    failed,
+    pending,
+    status,
+    isActive,
+    startedAt,
+    endedAt,
+    activeDurationSec,
+    progress,
+    progressPercent: Math.round(progress * 10000) / 100,
+    errorRootKeys,
+  };
+}
+
 export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
   app.get("/worldstate/full", async (c) => {
     // Default to English if no lang parameter provided
@@ -119,6 +230,147 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
 
   app.get("/worldstate/status", async (c) => {
     return c.json(await getWorldStateStatus(c));
+  });
+
+  app.get("/worldstate/runs/:runId/progress", async (c) => {
+    const runId = c.req.param("runId").trim();
+
+    if (!runId) {
+      return c.json({ ok: false, error: "runId is required" }, 400);
+    }
+
+    await ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1);
+    await ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1);
+
+    const runResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectPipelineRunById)
+      .bind(runId)
+      .all<PipelineRunRow>();
+
+    const run = runResult.results[0] ?? null;
+
+    const queueResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
+      .bind(runId)
+      .all<QueueLogRow>();
+
+    const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+      .bind(runId)
+      .all<{ rootKey: string }>();
+
+    const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
+
+    const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
+
+    return c.json({
+      ok: true,
+      runId,
+      run,
+      queue: {
+        queued: queue.queued,
+        queuedKeys: queue.queuedKeys,
+        queuedKeysCount: queue.queuedKeysCount,
+        processed: queue.processed,
+        failed: queue.failed,
+        pending: queue.pending,
+        status: queue.status,
+        isActive: queue.isActive,
+        startedAt: queue.startedAt,
+        endedAt: queue.endedAt,
+        activeDurationSec: queue.activeDurationSec,
+        progress: queue.progress,
+        progressPercent: queue.progressPercent,
+      },
+      errorRootKeys: queue.errorRootKeys,
+      updatedAt: new Date().toISOString(),
+    });
+  });
+
+  app.get("/worldstate/runs/current", async (c) => {
+    await ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1);
+    await ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1);
+
+    const limitParam = Number.parseInt(c.req.query("limit") ?? "20", 10);
+    const limit = Number.isNaN(limitParam) ? 20 : Math.max(1, Math.min(100, limitParam));
+
+    const recentResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectRecentPipelineRuns)
+      .bind(limit)
+      .all<PipelineRunRow>();
+
+    if (recentResult.results.length === 0) {
+      return c.json({ ok: false, error: "no runs found" }, 404);
+    }
+
+    const summaries: Array<{
+      run: PipelineRunRow;
+      queue: {
+        queued: number;
+        queuedKeys: string[];
+        queuedKeysCount: number;
+        processed: number;
+        failed: number;
+        pending: number;
+        status: string;
+        isActive: boolean;
+        startedAt: string | null;
+        endedAt: string | null;
+        activeDurationSec: number | null;
+        progress: number;
+        progressPercent: number;
+      };
+      errorRootKeys: Array<{ rootKey: string; error: string }>;
+    }> = [];
+
+    for (const run of recentResult.results) {
+      const queueResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
+        .bind(run.runId)
+        .all<QueueLogRow>();
+
+      const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+        .bind(run.runId)
+        .all<{ rootKey: string }>();
+
+      const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
+
+      const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
+      summaries.push({
+        run,
+        queue: {
+          queued: queue.queued,
+          queuedKeys: queue.queuedKeys,
+          queuedKeysCount: queue.queuedKeysCount,
+          processed: queue.processed,
+          failed: queue.failed,
+          pending: queue.pending,
+          status: queue.status,
+          isActive: queue.isActive,
+          startedAt: queue.startedAt,
+          endedAt: queue.endedAt,
+          activeDurationSec: queue.activeDurationSec,
+          progress: queue.progress,
+          progressPercent: queue.progressPercent,
+        },
+        errorRootKeys: queue.errorRootKeys,
+      });
+    }
+
+    const active = summaries.find((item) => item.queue.pending > 0) ?? null;
+    const latestCompleted = summaries.find((item) => item.queue.pending === 0) ?? null;
+    const latestFallback = summaries[0] ?? null;
+    const latest = latestCompleted ?? latestFallback;
+    const selected = active ?? latest;
+
+    if (!selected || !latest) {
+      return c.json({ ok: false, error: "no runs found" }, 404);
+    }
+
+    return c.json({
+      ok: true,
+      mode: active ? "active" : "latest",
+      selected,
+      active,
+      latest,
+      scannedRuns: summaries.length,
+      updatedAt: new Date().toISOString(),
+    });
   });
 
   app.get("/worldstate/translated/:rootKey", async (c) => {

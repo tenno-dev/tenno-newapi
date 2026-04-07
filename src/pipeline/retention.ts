@@ -9,8 +9,25 @@ import { SQL } from "../db/sql";
 
 export const MAX_RETAINED_RUNS = 60;
 
+async function ensurePipelineRunExecutionColumns(db: D1Database): Promise<void> {
+  const alters = [
+    SQL.alterPipelineRunsAddExecutionStatus,
+    SQL.alterPipelineRunsAddStartedAt,
+    SQL.alterPipelineRunsAddCompletedAt,
+  ] as const;
+
+  for (const stmt of alters) {
+    try {
+      await db.prepare(stmt).run();
+    } catch {
+      // Column already exists or migration not needed.
+    }
+  }
+}
+
 export async function ensureDiffTables(db: D1Database): Promise<void> {
   await db.prepare(SQL.createPipelineRunsTable).run();
+  await ensurePipelineRunExecutionColumns(db);
   await db.prepare(SQL.createPipelineDiffsTable).run();
   await db.prepare(SQL.createPipelineItemChangesTable).run();
 }

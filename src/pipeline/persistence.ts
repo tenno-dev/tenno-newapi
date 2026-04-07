@@ -12,6 +12,67 @@ import { RootDiffItem, RootHashMap, RootItemChange } from "../tennodev/diff";
 import { SQL } from "../db/sql";
 import { ensureDiffTables, ensureQueueTables, pruneOldRuns } from "./retention";
 
+async function updateRunExecutionState(db: D1Database, runId: string): Promise<void> {
+  await ensureDiffTables(db);
+  await ensureQueueTables(db);
+
+  const runResult = await db.prepare(SQL.selectPipelineRunById).bind(runId).all<{
+    runId: string;
+    queuedCount: number;
+  }>();
+
+  const run = runResult.results[0];
+  if (!run) {
+    return;
+  }
+
+  const countsResult = await db
+    .prepare(SQL.selectRunQueueLatestStatusCountsByRun)
+    .bind(runId, runId)
+    .all<{ processedCount: number; failedCount: number; knownCount: number }>();
+
+  const counts = countsResult.results[0] ?? {
+    processedCount: 0,
+    failedCount: 0,
+    knownCount: 0,
+  };
+
+  const knownCount = Number(counts.knownCount ?? 0);
+  const failedCount = Number(counts.failedCount ?? 0);
+  const queuedCount = Number(run.queuedCount ?? 0);
+
+  const boundsResult = await db
+    .prepare(SQL.selectRunQueueTimeBoundsByRun)
+    .bind(runId)
+    .all<{ firstAt: string | null; lastAt: string | null }>();
+
+  const bounds = boundsResult.results[0] ?? { firstAt: null, lastAt: null };
+
+  if (knownCount === 0) {
+    await db
+      .prepare(SQL.updatePipelineRunExecutionState)
+      .bind("queued", null, null, runId)
+      .run();
+    return;
+  }
+
+  const isFinished = queuedCount > 0 && knownCount >= queuedCount;
+
+  if (isFinished) {
+    const status = failedCount > 0 ? "failed" : "completed";
+    await db
+      .prepare(SQL.updatePipelineRunCompletedState)
+      .bind(status, bounds.firstAt, bounds.lastAt, runId)
+      .run();
+    return;
+  }
+
+  await db
+    .prepare(SQL.updatePipelineRunExecutionState)
+    .bind("running", bounds.firstAt, null, runId)
+    .run();
+}
+
 export async function persistWorldStateRun(
   env: Bindings,
   input: {
@@ -106,7 +167,17 @@ export async function recordPreparedWorldStateRun(
 
   await ensureDiffTables(env.TENNODEV_WORLDSTATE_D1);
   await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.upsertPipelineRun)
-    .bind(input.runId, input.fetchedAt, input.sourceVersion, input.changedCount, 0, input.queuedCount)
+    .bind(
+      input.runId,
+      input.fetchedAt,
+      input.sourceVersion,
+      input.changedCount,
+      0,
+      input.queuedCount,
+      "queued",
+      null,
+      null
+    )
     .run();
 }
 
@@ -191,7 +262,10 @@ export async function finalizeWorldStateRun(
       input.sourceVersion,
       input.changedCount,
       input.dryRun ? 1 : 0,
-      input.queuedCount
+      input.queuedCount,
+      "queued",
+      null,
+      null
     )
     .run();
 
@@ -307,6 +381,8 @@ export async function logQueueProcessed(
       null
     )
     .run();
+
+  await updateRunExecutionState(db, input.runId);
 }
 
 export async function logQueueFailed(
@@ -332,4 +408,6 @@ export async function logQueueFailed(
       input.error
     )
     .run();
+
+  await updateRunExecutionState(db, input.runId);
 }
