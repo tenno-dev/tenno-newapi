@@ -14,7 +14,7 @@ coverage/
 *.tsbuildinfo
 
 # Cloudflare local output and state
-.wrangler/
+.wrangler/*
 
 # Environment and secrets
 .env
@@ -32,3 +32,4 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+.wrangler/tmp/*

@@ -5,6 +5,7 @@ import {
 } from "../cache/keys";
 import { logQueueProcessed } from "../pipeline/persistence";
 import {
+  ensureTranslationSyncInitialized,
   translationIndexR2Key,
   translationObjectIndexR2Key,
 } from "../pipeline/translations";
@@ -125,16 +126,24 @@ export async function processTranslationMessage(
 
   const rootData: unknown = JSON.parse(rawPayload);
   const payloadSize = rawPayload.length;
+  let attemptedBootstrap = false;
 
   // 2. For each target language, load the merged index from R2, translate, write to KV
   for (const lang of message.targetLanguages) {
     const indexKey = translationIndexR2Key(lang);
-    const indexObject = await env.TENNODEV_ASSETS_R2.get(indexKey);
     const objectIndexKey = translationObjectIndexR2Key(lang);
-    const objectIndexObject = await env.TENNODEV_ASSETS_R2.get(objectIndexKey);
+    let indexObject = await env.TENNODEV_ASSETS_R2.get(indexKey);
+    let objectIndexObject = await env.TENNODEV_ASSETS_R2.get(objectIndexKey);
+
+    if ((!indexObject || !objectIndexObject) && !attemptedBootstrap) {
+      attemptedBootstrap = true;
+      await ensureTranslationSyncInitialized(env);
+      indexObject = await env.TENNODEV_ASSETS_R2.get(indexKey);
+      objectIndexObject = await env.TENNODEV_ASSETS_R2.get(objectIndexKey);
+    }
 
     if (!indexObject || !objectIndexObject) {
-      // Translation sync hasn't run yet for this language — skip silently
+      // Indexes still unavailable for this language.
       continue;
     }
 

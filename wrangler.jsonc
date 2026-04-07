@@ -1,44 +1,50 @@
 {
-	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "tenno-newapi",
-	"main": "src/index.ts",
-	"compatibility_date": "2026-04-07",
-	"triggers": {
-		"crons": ["*/1 * * * *", "0 0 * * *"]
-	},
-	"kv_namespaces": [
-		{
-			"binding": "TENNODEV_WORLDSTATE_KV",
-			"id": "f210a28df95f465a8a5ccb4324f23de2",
-			"remote": true
-		}
-	],
-	"r2_buckets": [
-		{
-			"binding": "TENNODEV_ASSETS_R2",
-			"bucket_name": "tennodev-assets",
-			"remote": true
-		}
-	],
-	"d1_databases": [
-		{
-			"binding": "TENNODEV_WORLDSTATE_D1",
-			"database_name": "tennodev_worldstate",
-			"database_id": "56341030-151c-467a-b913-531f716cd62b",
-			"remote": true
-		}
-	],
-	"queues": {
-		"producers": [
-			{
-				"binding": "TENNODEV_PUSH_QUEUE",
-				"queue": "tennodev-push"
-			}
-		],
-		"consumers": [
-			{
-				"queue": "tennodev-push"
-			}
-		]
-	}
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tenno-newapi",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-07",
+  "triggers": {
+    "crons": ["*/1 * * * *", "0 0 * * *"],
+  },
+  "observability": {
+    "logs": {
+      "enabled": false,
+      "invocation_logs": true,
+    },
+  },
+  "kv_namespaces": [
+    {
+      "binding": "TENNODEV_WORLDSTATE_KV",
+      "id": "f210a28df95f465a8a5ccb4324f23de2",
+      "remote": true,
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TENNODEV_ASSETS_R2",
+      "bucket_name": "tennodev-assets",
+      "remote": true,
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "TENNODEV_WORLDSTATE_D1",
+      "database_name": "tennodev_worldstate",
+      "database_id": "56341030-151c-467a-b913-531f716cd62b",
+      "remote": true,
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "TENNODEV_PUSH_QUEUE",
+        "queue": "tennodev-push",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "tennodev-push",
+      },
+    ],
+  },
 }
