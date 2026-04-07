@@ -1,0 +1,6 @@
+# Local dev-only overrides
+# Worker source proxy URL (without token query)
+WORLDSTATE_SOURCE_URL=https://api2.mediathek.community/worldstate
+
+# Token appended by worker as ?url=<token>
+WORLDSTATE_SOURCE_TOKEN=5062e34660a362d55e1b102ca0db4141005d7ec041ce7412bdb0329192aab5fb

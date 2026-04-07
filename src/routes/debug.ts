@@ -9,9 +9,15 @@ import {
   getLatestPushCandidates,
   getWorldStateCachePlan,
   getWorldStateSplit,
-  WORLDSTATE_BUCKETS,
 } from "../pipeline/worldstate";
-import { executeTranslationSync, getTranslationSyncStatus } from "../pipeline/translations";
+import { WORLDSTATE_BUCKETS } from "../tennodev/sections";
+import {
+  executeTranslationSync,
+  getTranslationSyncStatus,
+  translationIndexR2Key,
+  translationObjectIndexR2Key,
+  TRANSLATION_LANGS,
+} from "../pipeline/translations";
 import { parseBoolean } from "../app/http";
 
 async function debugR2Index(c: AppContext) {
@@ -90,6 +96,67 @@ export function registerDebugRoutes(app: Hono<AppEnv>): void {
   app.get("/debug/translations/status", async (c) => {
     const status = await getTranslationSyncStatus(c.env);
     return c.json({ ok: true, ...status });
+  });
+
+  app.get("/debug/translations/view", async (c) => {
+    const lang = (c.req.query("lang") ?? "en").toLowerCase().trim();
+
+    // Validate language
+    if (!TRANSLATION_LANGS.includes(lang as any)) {
+      return c.json(
+        {
+          ok: false,
+          error: `Invalid language: ${lang}`,
+          supportedLanguages: TRANSLATION_LANGS,
+        },
+        400
+      );
+    }
+
+    // Load flat index (for simple key->value lookups)
+    let flatIndex: Record<string, string> = {};
+    const flatIndexObj = await c.env.TENNODEV_ASSETS_R2.get(translationIndexR2Key(lang));
+    if (flatIndexObj) {
+      const text = await flatIndexObj.text();
+      flatIndex = JSON.parse(text) as Record<string, string>;
+    }
+
+    // Load object index (for complex field merges)
+    let objectIndex: unknown = null;
+    const objectIndexObj = await c.env.TENNODEV_ASSETS_R2.get(translationObjectIndexR2Key(lang));
+    if (objectIndexObj) {
+      const text = await objectIndexObj.text();
+      objectIndex = JSON.parse(text) as unknown;
+    }
+
+    // Count file entries in object index
+    let objectIndexFileCount = 0;
+    let objectIndexEntryCount = 0;
+    if (objectIndex && typeof objectIndex === "object" && "files" in objectIndex) {
+      const files = (objectIndex as Record<string, any>).files;
+      if (files && typeof files === "object") {
+        objectIndexFileCount = Object.keys(files).length;
+        for (const file of Object.values(files)) {
+          if (file && typeof file === "object" && "entries" in file) {
+            objectIndexEntryCount += Object.keys((file as any).entries || {}).length;
+          }
+        }
+      }
+    }
+
+    return c.json({
+      ok: true,
+      lang,
+      flatIndex: {
+        count: Object.keys(flatIndex).length,
+        entries: flatIndex,
+      },
+      objectIndex: {
+        filesCount: objectIndexFileCount,
+        entriesCount: objectIndexEntryCount,
+        structure: objectIndex,
+      },
+    });
   });
 
   app.get("/debug/queue/index", async (c) => {

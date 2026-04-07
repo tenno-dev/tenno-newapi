@@ -1,6 +1,11 @@
 export const ACTIVE_ROUTES = [
   "GET /",
   "GET /health",
+  "GET /docs",
+  "GET /openapi.json",
+  "POST /internal/translations/sync",
+  "GET /debug-public/warframe/fetch",
+  "GET /worldstate/full",
   "GET /worldstate/status",
   "GET /worldstate/translated/:rootKey",
   "GET /worldstate/translated/:rootKey/runs/:runId",

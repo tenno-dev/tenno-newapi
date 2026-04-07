@@ -6,6 +6,9 @@ export type Bindings = {
   TENNODEV_WORLDSTATE_D1: D1Database;
   TENNODEV_PUSH_QUEUE: Queue;
   APP_ENV?: string;
+  DEPLOY_TRIGGER_TOKEN?: string;
+  WORLDSTATE_SOURCE_URL?: string;
+  WORLDSTATE_SOURCE_TOKEN?: string;
 };
 
 export type AppEnv = {

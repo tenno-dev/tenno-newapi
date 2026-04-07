@@ -1,17 +1,28 @@
 import { RawWorldState } from "../types/worldstate";
+import { TOP_LEVEL_WORLDSTATE_KEYS } from "../types/worldstate";
 
 const DEFAULT_WORLDSTATE_URL = "https://api.warframe.com/cdn/worldState.php";
-const FALLBACK_WORLDSTATE_URLS = [
-  DEFAULT_WORLDSTATE_URL,
-  "https://content.warframe.com/dynamic/worldState.php",
-  "https://api.warframestat.us/pc",
-] as const;
+
+function hasKnownWorldStateShape(data: unknown): data is RawWorldState {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return false;
+  }
+
+  return TOP_LEVEL_WORLDSTATE_KEYS.some((key) => key in (data as Record<string, unknown>));
+}
 
 function buildWorldStateRequestInit(init?: RequestInit): RequestInit {
   const headers = new Headers(init?.headers);
 
   if (!headers.has("accept")) {
-    headers.set("accept", "application/json,text/plain,*/*");
+    headers.set(
+      "accept",
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+    );
+  }
+  if (!headers.has("accept-encoding")) {
+    // Cloudflare Workers can receive zstd from some edges; force uncompressed JSON for safe parsing.
+    headers.set("accept-encoding", "identity");
   }
   if (!headers.has("accept-language")) {
     headers.set("accept-language", "en-US,en;q=0.9");
@@ -24,6 +35,39 @@ function buildWorldStateRequestInit(init?: RequestInit): RequestInit {
   }
   if (!headers.has("cache-control")) {
     headers.set("cache-control", "no-cache");
+  }
+  if (!headers.has("pragma")) {
+    headers.set("pragma", "no-cache");
+  }
+  if (!headers.has("upgrade-insecure-requests")) {
+    headers.set("upgrade-insecure-requests", "1");
+  }
+  if (!headers.has("sec-ch-ua")) {
+    headers.set("sec-ch-ua", '"Chromium";v="147", "Not=A?Brand";v="8"');
+  }
+  if (!headers.has("sec-ch-ua-mobile")) {
+    headers.set("sec-ch-ua-mobile", "?0");
+  }
+  if (!headers.has("sec-ch-ua-platform")) {
+    headers.set("sec-ch-ua-platform", '"Windows"');
+  }
+  if (!headers.has("sec-fetch-dest")) {
+    headers.set("sec-fetch-dest", "document");
+  }
+  if (!headers.has("sec-fetch-mode")) {
+    headers.set("sec-fetch-mode", "navigate");
+  }
+  if (!headers.has("sec-fetch-site")) {
+    headers.set("sec-fetch-site", "none");
+  }
+  if (!headers.has("sec-fetch-user")) {
+    headers.set("sec-fetch-user", "?1");
+  }
+  if (!headers.has("user-agent")) {
+    headers.set(
+      "user-agent",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+    );
   }
 
   return {
@@ -38,34 +82,17 @@ export async function fetchWorldState(
   init?: RequestInit
 ): Promise<RawWorldState> {
   const requestInit = buildWorldStateRequestInit(init);
-  const candidates =
-    input === DEFAULT_WORLDSTATE_URL
-      ? FALLBACK_WORLDSTATE_URLS
-      : [input.toString(), ...FALLBACK_WORLDSTATE_URLS.filter((url) => url !== input.toString())];
+  const response = await fetch(input, requestInit);
 
-  let lastError = "Unknown fetch failure";
-
-  for (const candidate of candidates) {
-    try {
-      const response = await fetch(candidate, requestInit);
-
-      if (!response.ok) {
-        lastError = `Failed to fetch worldState from ${candidate}: ${response.status} ${response.statusText}`;
-        continue;
-      }
-
-      const data = (await response.json()) as unknown;
-
-      if (!data || typeof data !== "object" || Array.isArray(data)) {
-        lastError = `Invalid worldState payload from ${candidate}: expected a JSON object`;
-        continue;
-      }
-
-      return data as RawWorldState;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : "Unknown fetch failure";
-    }
+  if (!response.ok) {
+    throw new Error(`Failed to fetch worldState: ${response.status} ${response.statusText}`);
   }
 
-  throw new Error(lastError);
+  const data = (await response.json()) as unknown;
+
+  if (!hasKnownWorldStateShape(data)) {
+    throw new Error("Invalid worldState payload: expected official worldState shape");
+  }
+
+  return data as RawWorldState;
 }

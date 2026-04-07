@@ -12,6 +12,9 @@
       "invocation_logs": true,
     },
   },
+  "vars": {
+    "WORLDSTATE_SOURCE_URL": "https://api2.mediathek.community/worldstate"
+  },
   "kv_namespaces": [
     {
       "binding": "TENNODEV_WORLDSTATE_KV",

@@ -6,10 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler deploy && node scripts/post-deploy-sync.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hono/swagger-ui": "^0.6.1",
     "hono": "^4.12.12"
   },
   "devDependencies": {
