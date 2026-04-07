@@ -1,8 +1,11 @@
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "tennodev26",
+	"name": "tenno-newapi",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-04-07",
+	"triggers": {
+		"crons": ["*/1 * * * *", "0 0 * * *"]
+	},
 	"kv_namespaces": [
 		{
 			"binding": "TENNODEV_WORLDSTATE_KV",

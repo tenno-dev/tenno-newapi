@@ -5,6 +5,7 @@ export type Bindings = {
   TENNODEV_ASSETS_R2: R2Bucket;
   TENNODEV_WORLDSTATE_D1: D1Database;
   TENNODEV_PUSH_QUEUE: Queue;
+  APP_ENV?: string;
 };
 
 export type AppEnv = {

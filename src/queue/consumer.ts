@@ -1,7 +1,7 @@
-import { Bindings, QueueMessage, TranslateQueueMessage } from "../app/types";
+import { Bindings, QueueMessage } from "../app/types";
 import { ensureQueueTables, pruneOldRuns } from "../pipeline/retention";
 import { logQueueFailed } from "../pipeline/persistence";
-import { processDummyTranslationMessage } from "./dummy-translator";
+import { processTranslationMessage } from "./translator";
 import { handlePrepareWorldStateRun, handleProcessWorldStateRoot } from "./pipeline";
 
 export async function handleTranslateQueue(
@@ -21,7 +21,7 @@ export async function handleTranslateQueue(
       } else if (body?.type === "worldstate.process-root") {
         await handleProcessWorldStateRoot(env, body);
       } else if (body?.type === "worldstate.translate-root") {
-        await processDummyTranslationMessage(env, body as TranslateQueueMessage);
+        await processTranslationMessage(env, body);
       } else {
         throw new Error("Unsupported queue message type");
       }

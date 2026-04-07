@@ -1,41 +1,45 @@
 import { Hono } from "hono";
-import { parseBoolean } from "../app/http";
 import { AppEnv } from "../app/types";
+import { buildCurrentTranslatedRootKey, buildTranslatedRootKey } from "../cache/keys";
 import {
-  executeWorldStatePush,
-  getWorldStateCachePlan,
   getWorldStateDailyStats,
-  getLatestPushCandidates,
-  getWorldStateSplit,
   getWorldStateStats,
   getWorldStateStatus,
-  WORLDSTATE_BUCKETS,
 } from "../pipeline/worldstate";
 
 export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
-  app.get("/worldstate/buckets", (c) => {
-    return c.json({
-      buckets: WORLDSTATE_BUCKETS,
-    });
-  });
-
-  app.get("/worldstate/split", async (c) => {
-    return c.json(await getWorldStateSplit());
-  });
-
-  app.get("/worldstate/cache-plan", async (c) => {
-    const locale = c.req.query("lang") ?? "en";
-    return c.json(await getWorldStateCachePlan(locale));
-  });
-
-  app.post("/worldstate/push", async (c) => {
-    const dryRun = parseBoolean(c.req.query("dryRun"));
-    const force = parseBoolean(c.req.query("force"));
-    return c.json(await executeWorldStatePush(c, { dryRun, force }));
-  });
-
   app.get("/worldstate/status", async (c) => {
     return c.json(await getWorldStateStatus(c));
+  });
+
+  app.get("/worldstate/translated/:rootKey", async (c) => {
+    const rootKey = c.req.param("rootKey");
+    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase();
+    const key = buildCurrentTranslatedRootKey(rootKey, lang);
+    const payload = await c.env.TENNODEV_WORLDSTATE_KV.get(key, "json");
+
+    if (payload === null) {
+      return c.json({ ok: false, error: "translated payload not found", rootKey, lang, key }, 404);
+    }
+
+    return c.json({ ok: true, rootKey, lang, key, payload });
+  });
+
+  app.get("/worldstate/translated/:rootKey/runs/:runId", async (c) => {
+    const rootKey = c.req.param("rootKey");
+    const runId = c.req.param("runId");
+    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase();
+    const key = buildTranslatedRootKey(rootKey, lang, runId);
+    const payload = await c.env.TENNODEV_WORLDSTATE_KV.get(key, "json");
+
+    if (payload === null) {
+      return c.json(
+        { ok: false, error: "translated run payload not found", rootKey, runId, lang, key },
+        404
+      );
+    }
+
+    return c.json({ ok: true, rootKey, runId, lang, key, payload });
   });
 
   app.get("/worldstate/stats", async (c) => {
@@ -49,9 +53,5 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     return c.json(
       await getWorldStateDailyStats(c, Number.isNaN(days) ? 30 : days, rootKey)
     );
-  });
-
-  app.get("/worldstate/push-candidates", async (c) => {
-    return c.json(await getLatestPushCandidates(c));
   });
 }

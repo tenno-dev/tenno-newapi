@@ -1,4 +1,4 @@
-import { AppContext } from "../app/types";
+import { AppContext, Bindings } from "../app/types";
 import { buildRootPayloadKey } from "../cache/keys";
 import { loadCurrentRootPayload, loadLatestRunMeta } from "../cache/store";
 import { classifyPushCandidateKeys, classifyPushCandidates } from "./classification";
@@ -22,6 +22,7 @@ import {
 import { buildPrepareWorldStateRunMessage, buildTranslateQueueMessages } from "./messages";
 import { saveRawSnapshot } from "../cache/store";
 import { TOP_LEVEL_WORLDSTATE_KEYS, RawWorldState } from "../types/worldstate";
+import { ensureTranslationSyncInitialized } from "./translations";
 
 export async function getWorldStateSplit() {
   return buildWorldStateSplitModel();
@@ -32,7 +33,7 @@ export async function getWorldStateCachePlan(locale = "en") {
 }
 
 export async function executeWorldStatePush(
-  c: AppContext,
+  env: Bindings,
   options: { dryRun: boolean; force: boolean }
 ) {
   const sourceLocale = "en";
@@ -47,8 +48,12 @@ export async function executeWorldStatePush(
       ? String(sourceVersionRaw)
       : null;
 
+  const translationBootstrap = options.dryRun
+    ? { initialized: false, bootstrappedNow: false, result: null }
+    : await ensureTranslationSyncInitialized(env);
+
   if (!options.dryRun) {
-    const rawSnapshotKey = await saveRawSnapshot(c.env.TENNODEV_WORLDSTATE_KV, runId, rawPayload);
+    const rawSnapshotKey = await saveRawSnapshot(env.TENNODEV_WORLDSTATE_KV, runId, rawPayload);
     const prepareMessage = buildPrepareWorldStateRunMessage({
       runId,
       fetchedAt,
@@ -59,7 +64,7 @@ export async function executeWorldStatePush(
       force: options.force,
     });
 
-    await c.env.TENNODEV_PUSH_QUEUE.send(prepareMessage);
+    await env.TENNODEV_PUSH_QUEUE.send(prepareMessage);
 
     return {
       ok: true,
@@ -80,17 +85,18 @@ export async function executeWorldStatePush(
       sourceLocale,
       targetLanguages: TRANSLATE_TARGET_LANGUAGES,
       queueActive: true,
+      translationBootstrap,
       rawSnapshotKey,
       changedPayloadKeys: [],
       queuePreview: [prepareMessage],
     };
   }
 
-  const analysis = await analyzeWorldStateDiffs(c.env.TENNODEV_WORLDSTATE_KV, worldState, options.force);
+  const analysis = await analyzeWorldStateDiffs(env.TENNODEV_WORLDSTATE_KV, worldState, options.force);
   const changed = analysis.changed;
   const classification = analysis.classification;
   const previousRootValues = await loadPreviousRootValues(
-    c.env.TENNODEV_WORLDSTATE_KV,
+    env.TENNODEV_WORLDSTATE_KV,
     changed.map((item) => item.rootKey)
   );
 
@@ -127,7 +133,7 @@ export async function executeWorldStatePush(
   let queuedCount = 0;
 
   if (!options.dryRun) {
-    const persisted = await persistWorldStateRun(c.env, {
+    const persisted = await persistWorldStateRun(env, {
       runId,
       fetchedAt,
       sourceVersion,
@@ -152,11 +158,11 @@ export async function executeWorldStatePush(
     );
 
     for (const message of queueMessages) {
-      await c.env.TENNODEV_PUSH_QUEUE.send(message);
+      await env.TENNODEV_PUSH_QUEUE.send(message);
       queuedCount += 1;
     }
 
-    await finalizeWorldStateRun(c.env, {
+    await finalizeWorldStateRun(env, {
       runId,
       fetchedAt,
       sourceVersion,
@@ -188,6 +194,7 @@ export async function executeWorldStatePush(
     sourceLocale,
     targetLanguages: TRANSLATE_TARGET_LANGUAGES,
     queueActive: true,
+    translationBootstrap,
     rawSnapshotKey,
     changedPayloadKeys,
     queuePreview: queueMessages,

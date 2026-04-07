@@ -55,3 +55,11 @@ export function buildLastKnownRootPayloadKey(rootKey: string): string {
 export function buildDummyTranslationKey(runId: string, rootKey: string): string {
   return `${CACHE_NAMESPACE}:translate:dummy:run:${runId}:root:${rootKey}`;
 }
+
+export function buildTranslatedRootKey(rootKey: string, lang: string, runId: string): string {
+  return `${CACHE_NAMESPACE}:root:${rootKey}:translated:${lang}:run:${runId}`;
+}
+
+export function buildCurrentTranslatedRootKey(rootKey: string, lang: string): string {
+  return `${CACHE_NAMESPACE}:root:${rootKey}:translated:${lang}:current`;
+}
