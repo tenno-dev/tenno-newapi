@@ -20,7 +20,13 @@ const TRANSLATED_ROOT_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
  */
 function applyTranslations(data: unknown, index: Record<string, string>): unknown {
   if (typeof data === "string") {
-    return index[data] ?? data;
+    const exact = index[data];
+    if (typeof exact === "string") {
+      return exact;
+    }
+
+    const normalized = index[normalizeLookupKey(data)];
+    return typeof normalized === "string" ? normalized : data;
   }
 
   if (Array.isArray(data)) {
