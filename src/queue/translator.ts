@@ -3,6 +3,7 @@ import {
   buildCurrentTranslatedRootKey,
   buildTranslatedRootKey,
 } from "../cache/keys";
+import { saveCurrentTranslatedRootPayloadIfNewer } from "../cache/store";
 import { logQueueProcessed } from "../pipeline/persistence";
 import {
   ensureTranslationSyncInitialized,
@@ -166,8 +167,14 @@ export async function processTranslationMessage(
     });
 
     // Current pointer (no TTL — always latest)
-    const currentKey = buildCurrentTranslatedRootKey(message.rootKey, lang);
-    await env.TENNODEV_WORLDSTATE_KV.put(currentKey, serialized);
+    await saveCurrentTranslatedRootPayloadIfNewer(
+      env.TENNODEV_WORLDSTATE_KV,
+      message.rootKey,
+      lang,
+      serialized,
+      message.runId,
+      message.fetchedAt
+    );
   }
 
   // 3. Log success to D1

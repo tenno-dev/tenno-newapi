@@ -4,10 +4,10 @@ import {
   Bindings,
 } from "../app/types";
 import {
-  deleteCurrentRootPayload,
+  deleteCurrentRootPayloadIfNewer,
   loadCurrentRootPayload,
   loadRawSnapshotByKey,
-  saveCurrentRootPayload,
+  saveCurrentRootPayloadIfNewer,
   saveLastKnownRootPayload,
 } from "../cache/store";
 import { SQL } from "../db/sql";
@@ -111,7 +111,13 @@ export async function handleProcessWorldStateRoot(
   });
 
   if (hasRootKey) {
-    await saveCurrentRootPayload(env.TENNODEV_WORLDSTATE_KV, message.rootKey, payload);
+    await saveCurrentRootPayloadIfNewer(
+      env.TENNODEV_WORLDSTATE_KV,
+      message.rootKey,
+      payload,
+      message.runId,
+      message.fetchedAt
+    );
     await saveLastKnownRootPayload(env.TENNODEV_WORLDSTATE_KV, message.rootKey, payload);
 
     const translateMessages = buildTranslateQueueMessages(
@@ -129,6 +135,11 @@ export async function handleProcessWorldStateRoot(
       await env.TENNODEV_PUSH_QUEUE.send(translateMessage);
     }
   } else {
-    await deleteCurrentRootPayload(env.TENNODEV_WORLDSTATE_KV, message.rootKey);
+    await deleteCurrentRootPayloadIfNewer(
+      env.TENNODEV_WORLDSTATE_KV,
+      message.rootKey,
+      message.runId,
+      message.fetchedAt
+    );
   }
 }
