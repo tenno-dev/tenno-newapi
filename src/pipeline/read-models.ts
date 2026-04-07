@@ -51,12 +51,18 @@ export function buildWorldStateStatusModel(input: {
   latestRun: unknown;
   rootHashCount: number;
   d1RunCount: number;
+  source: {
+    mode: "official" | "proxy";
+    url: string;
+    tokenConfigured: boolean;
+  };
 }) {
   return {
     ok: true,
     latestRun: input.latestRun,
     rootHashCount: input.rootHashCount,
     d1RunCount: input.d1RunCount,
+    source: input.source,
     retainedRunLimit: MAX_RETAINED_RUNS,
     queueLanguages: TRANSLATE_TARGET_LANGUAGES,
   };

@@ -1,36 +1,26 @@
-import { AppContext, Bindings } from "../app/types";
-import { buildRootPayloadKey } from "../cache/keys";
-import { loadCurrentRootPayload, loadLatestRunMeta } from "../cache/store";
-import { classifyPushCandidateKeys, classifyPushCandidates } from "./classification";
-import { diffRootHashes, diffRootItems, hashRootValues, RootHashMap, stableStringify, hashString } from "../tennodev/diff";
-import { TRANSLATE_TARGET_LANGUAGES } from "../tennodev/languages";
-import { fetchWorldState } from "../tennodev/client";
-import { WORLDSTATE_BUCKETS } from "../tennodev/sections";
+/**
+ * Worldstate push orchestration.
+ * Main entry point for fetching, analyzing, and queueing worldstate updates.
+ */
+
+import { Bindings } from "../../app/types";
+import { buildRootPayloadKey } from "../../cache/keys";
+import { saveRawSnapshot } from "../../cache/store";
+import { diffRootItems } from "../../tennodev/diff";
+import { TRANSLATE_TARGET_LANGUAGES } from "../../tennodev/languages";
+import { fetchWorldState } from "../../tennodev/client";
 import {
-  finalizeWorldStateRun,
-  getItemChangeDailyStats,
-  getItemChangeStats,
-  getPipelineRunCount,
-  loadPreviousRootValues,
+  buildPrepareWorldStateRunMessage,
+  buildTranslateQueueMessages,
+} from "../messages";
+import {
   persistWorldStateRun,
-} from "./persistence";
-import {
-  buildWorldStateCachePlanModel,
-  buildWorldStateSplitModel,
-  buildWorldStateStatusModel,
-} from "./read-models";
-import { buildPrepareWorldStateRunMessage, buildTranslateQueueMessages } from "./messages";
-import { saveRawSnapshot } from "../cache/store";
-import { TOP_LEVEL_WORLDSTATE_KEYS, RawWorldState } from "../types/worldstate";
-import { ensureTranslationSyncInitialized } from "./translations";
-
-export async function getWorldStateSplit() {
-  return buildWorldStateSplitModel();
-}
-
-export async function getWorldStateCachePlan(locale = "en") {
-  return buildWorldStateCachePlanModel(locale);
-}
+  finalizeWorldStateRun,
+  loadPreviousRootValues,
+} from "../persistence";
+import { analyzeWorldStateDiffs } from "./analysis";
+import { ensureTranslationSyncInitialized } from "../translations";
+import { RawWorldState } from "../../types/worldstate";
 
 export async function executeWorldStatePush(
   env: Bindings,
@@ -39,8 +29,19 @@ export async function executeWorldStatePush(
   const sourceLocale = "en";
   const fetchedAt = new Date().toISOString();
   const runId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const configuredSource = env.WORLDSTATE_SOURCE_URL?.trim();
 
-  const worldState = await fetchWorldState();
+  let worldStateSource: string | undefined = undefined;
+  if (configuredSource) {
+    const url = new URL(configuredSource);
+    const token = env.WORLDSTATE_SOURCE_TOKEN?.trim();
+    if (token) {
+      url.searchParams.set("url", token);
+    }
+    worldStateSource = url.toString();
+  }
+
+  const worldState = await fetchWorldState(worldStateSource || undefined);
   const rawPayload = JSON.stringify(worldState);
   const sourceVersionRaw = worldState.Version;
   const sourceVersion =
@@ -200,99 +201,3 @@ export async function executeWorldStatePush(
     queuePreview: queueMessages,
   };
 }
-
-export async function getWorldStateStatus(c: AppContext) {
-  const latestRun = await loadLatestRunMeta(c.env.TENNODEV_WORLDSTATE_KV);
-  const rootHashes = await loadCurrentRootHashes(c.env.TENNODEV_WORLDSTATE_KV);
-  const totalRuns = await getPipelineRunCount(c.env.TENNODEV_WORLDSTATE_D1);
-
-  return buildWorldStateStatusModel({
-    latestRun,
-    rootHashCount: Object.keys(rootHashes).length,
-    d1RunCount: totalRuns,
-  });
-}
-
-export async function loadCurrentRootHashes(kv: KVNamespace): Promise<RootHashMap> {
-  const currentEntries = await Promise.all(
-    TOP_LEVEL_WORLDSTATE_KEYS.map(async (rootKey) => ({
-      rootKey,
-      value: await loadCurrentRootPayload(kv, rootKey),
-    }))
-  );
-  const hashes: RootHashMap = {};
-
-  await Promise.all(
-    currentEntries.map(async (entry) => {
-      if (entry.value !== null) {
-        hashes[entry.rootKey] = await hashString(stableStringify(entry.value));
-      }
-    })
-  );
-
-  return hashes;
-}
-
-export async function analyzeWorldStateDiffs(
-  kv: KVNamespace,
-  worldState: RawWorldState,
-  force: boolean
-): Promise<{
-  nextHashes: RootHashMap;
-  changed: Array<{ rootKey: string; previousHash: string | null; nextHash: string; changed: boolean }>;
-  classification: { pushCandidateKeys: string[]; nonPushKeys: string[] };
-}> {
-  const nextHashes = await hashRootValues(worldState);
-  const previousHashes = await loadCurrentRootHashes(kv);
-  const diffs = diffRootHashes(previousHashes, nextHashes, force);
-  const changed = diffs.filter((item) => item.changed);
-
-  return {
-    nextHashes,
-    changed,
-    classification: classifyPushCandidates(changed),
-  };
-}
-
-export async function getLatestPushCandidates(c: AppContext) {
-  const latestRun = await loadLatestRunMeta(c.env.TENNODEV_WORLDSTATE_KV);
-  const changedRootKeys = latestRun?.changedRootKeys ?? [];
-  const classification = classifyPushCandidateKeys(changedRootKeys);
-
-  return {
-    ok: true,
-    latestRun,
-    changedRootKeys,
-    pushCandidateKeys: classification.pushCandidateKeys,
-    nonPushKeys: classification.nonPushKeys,
-  };
-}
-
-export async function getWorldStateStats(c: AppContext, days: number) {
-  const safeDays = Math.max(1, Math.min(days, 365));
-  const rootKeyStats = await getItemChangeStats(c.env.TENNODEV_WORLDSTATE_D1, safeDays);
-
-  return {
-    ok: true,
-    days: safeDays,
-    rootKeyStats,
-  };
-}
-
-export async function getWorldStateDailyStats(c: AppContext, days: number, rootKey?: string) {
-  const safeDays = Math.max(1, Math.min(days, 365));
-  const dailyRootKeyStats = await getItemChangeDailyStats(
-    c.env.TENNODEV_WORLDSTATE_D1,
-    safeDays,
-    rootKey
-  );
-
-  return {
-    ok: true,
-    days: safeDays,
-    rootKey: rootKey ?? null,
-    dailyRootKeyStats,
-  };
-}
-
-export { WORLDSTATE_BUCKETS };

@@ -33,3 +33,6 @@ Thumbs.db
 *.tmp
 *.temp
 .wrangler/tmp/*
+
+# WireGuard secrets
+proxy/*
