@@ -36,6 +36,11 @@ export async function ensureQueueTables(db: D1Database): Promise<void> {
   await db.prepare(SQL.createTranslateQueueLogsTable).run();
 }
 
+export async function ensurePushTables(db: D1Database): Promise<void> {
+  await db.prepare(SQL.createPushSubscriptionsTable).run();
+  await db.prepare(SQL.createPushSubscriptionRootKeysTable).run();
+}
+
 export async function pruneOldRuns(env: Bindings): Promise<void> {
   await ensureDiffTables(env.TENNODEV_WORLDSTATE_D1);
   await ensureQueueTables(env.TENNODEV_WORLDSTATE_D1);

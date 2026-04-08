@@ -54,4 +54,24 @@ export const SQL = {
     "UPDATE pipeline_runs SET execution_status = ?, started_at = COALESCE(started_at, ?), completed_at = COALESCE(completed_at, ?) WHERE run_id = ?",
   selectSchemaObjects:
     "SELECT name, type, tbl_name as tableName, sql FROM sqlite_master WHERE type IN ('table', 'index') ORDER BY type, name LIMIT ?",
+  createPushSubscriptionsTable:
+    "CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, lang TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_seen_at TEXT, disabled_at TEXT)",
+  createPushSubscriptionRootKeysTable:
+    "CREATE TABLE IF NOT EXISTS push_subscription_rootkeys (subscription_id TEXT NOT NULL, root_key TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (subscription_id, root_key))",
+  upsertPushSubscription:
+    "INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, lang, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, lang = excluded.lang, updated_at = excluded.updated_at, disabled_at = NULL",
+  selectPushSubscriptionByEndpoint:
+    "SELECT id, endpoint, p256dh, auth, lang, created_at as createdAt, updated_at as updatedAt, last_seen_at as lastSeenAt, disabled_at as disabledAt FROM push_subscriptions WHERE endpoint = ? LIMIT 1",
+  deletePushSubscriptionRootKeysBySubscriptionId:
+    "DELETE FROM push_subscription_rootkeys WHERE subscription_id = ?",
+  insertPushSubscriptionRootKey:
+    "INSERT OR IGNORE INTO push_subscription_rootkeys (subscription_id, root_key, created_at) VALUES (?, ?, ?)",
+  disablePushSubscriptionByEndpoint:
+    "UPDATE push_subscriptions SET disabled_at = ? WHERE endpoint = ?",
+  deletePushSubscriptionByEndpoint:
+    "DELETE FROM push_subscriptions WHERE endpoint = ?",
+  deletePushSubscriptionRootKeysByEndpoint:
+    "DELETE FROM push_subscription_rootkeys WHERE subscription_id = (SELECT id FROM push_subscriptions WHERE endpoint = ?)",
+  selectMatchingPushSubscriptions:
+    "SELECT s.id, s.endpoint, s.p256dh, s.auth, s.lang FROM push_subscriptions s JOIN push_subscription_rootkeys k ON k.subscription_id = s.id WHERE s.disabled_at IS NULL AND s.lang = ? AND (k.root_key = ? OR k.root_key = '*')",
 } as const;

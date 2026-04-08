@@ -9,6 +9,8 @@ export type Bindings = {
   DEPLOY_TRIGGER_TOKEN?: string;
   WORLDSTATE_SOURCE_URL?: string;
   WORLDSTATE_SOURCE_TOKEN?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
 };
 
 export type AppEnv = {
@@ -45,7 +47,17 @@ export type TranslateQueueMessage = QueueJobBase & {
   payloadKey: string;
 };
 
+export type TranslatePingMessage = {
+  type: "worldstate.translate-ping";
+  rootKey: string;
+  lang: string;
+  hash: string;
+  runId: string;
+  fetchedAt: string;
+};
+
 export type QueueMessage =
   | PrepareWorldStateRunMessage
   | ProcessWorldStateRootMessage
-  | TranslateQueueMessage;
+  | TranslateQueueMessage
+  | TranslatePingMessage;

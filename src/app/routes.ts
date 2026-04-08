@@ -9,8 +9,12 @@ export const ACTIVE_ROUTES = [
   "GET /worldstate/status",
   "GET /worldstate/translated/:rootKey",
   "GET /worldstate/translated/:rootKey/runs/:runId",
+  "GET /worldstate/translated/:rootKey/hashes/:hash",
   "GET /worldstate/stats",
   "GET /worldstate/stats/daily",
+  "GET /push/vapid-public-key",
+  "POST /push/subscribe",
+  "POST /push/unsubscribe",
   // debug — dev only
   "GET /debug/bindings",
   "GET /debug/worldstate/buckets",

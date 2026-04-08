@@ -1,14 +1,17 @@
-import { Bindings, QueueMessage } from "../app/types";
+import { Bindings, QueueMessage, TranslatePingMessage } from "../app/types";
 import { ensureQueueTables, pruneOldRuns } from "../pipeline/retention";
 import { logQueueFailed } from "../pipeline/persistence";
 import { processTranslationMessage } from "./translator";
 import { handlePrepareWorldStateRun, handleProcessWorldStateRoot } from "./pipeline";
+import { sendWebPushBatch } from "../push/webpush";
 
 export async function handleTranslateQueue(
   batch: MessageBatch<QueueMessage>,
   env: Bindings
 ): Promise<void> {
   await ensureQueueTables(env.TENNODEV_WORLDSTATE_D1);
+
+  const pingMessages: TranslatePingMessage[] = [];
 
   for (const message of batch.messages) {
     const body = message.body;
@@ -22,6 +25,8 @@ export async function handleTranslateQueue(
         await handleProcessWorldStateRoot(env, body);
       } else if (body?.type === "worldstate.translate-root") {
         await processTranslationMessage(env, body);
+      } else if (body?.type === "worldstate.translate-ping") {
+        pingMessages.push(body);
       } else {
         throw new Error("Unsupported queue message type");
       }
@@ -33,11 +38,16 @@ export async function handleTranslateQueue(
         runId: body?.runId ?? "unknown",
         rootKey,
         payloadKey,
-        targetLanguages: body?.targetLanguages ?? [],
+        targetLanguages: ("targetLanguages" in body ? body.targetLanguages : []) as string[],
         error: errText,
       });
       message.retry();
     }
+  }
+
+  // Process all collected ping messages together (deduplicated)
+  if (pingMessages.length > 0) {
+    await sendWebPushBatch(env, pingMessages);
   }
 
   await pruneOldRuns(env);
