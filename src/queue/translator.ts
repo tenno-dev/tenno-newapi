@@ -175,8 +175,9 @@ export async function processTranslationMessage(
       expirationTtl: TRANSLATED_ROOT_TTL_SECONDS,
     });
 
-    // Store KV index: (rootKey, lang, hash) => runKey (TTL aligned with run snapshot)
-    const hashIndexKey = buildTranslatedHashIndexKey(message.rootKey, lang, translatedHash);
+    // Store KV index: (rootKey, hash) => runKey (TTL aligned with run snapshot)
+    // lang is already encoded in the translated content so the hash is unique per diff
+    const hashIndexKey = buildTranslatedHashIndexKey(message.rootKey, translatedHash);
     await env.TENNODEV_WORLDSTATE_KV.put(hashIndexKey, runKey, {
       expirationTtl: TRANSLATED_ROOT_TTL_SECONDS,
     });
