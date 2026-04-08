@@ -412,20 +412,19 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
   app.get("/worldstate/translated/:rootKey/hashes/:hash", async (c) => {
     const rootKey = c.req.param("rootKey");
     const hash = c.req.param("hash");
-    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase() || "en";
 
-    // Look up run key from hash index
-    const hashIndexKey = buildTranslatedHashIndexKey(rootKey, lang, hash);
+    // Look up run key from hash index — lang is already encoded in the hash
+    const hashIndexKey = buildTranslatedHashIndexKey(rootKey, hash);
     const runKey = await c.env.TENNODEV_WORLDSTATE_KV.get(hashIndexKey);
 
     if (!runKey) {
-      return c.json({ ok: false, error: "translated payload not found for hash", rootKey, lang, hash }, 404);
+      return c.json({ ok: false, error: "translated payload not found for hash", rootKey, hash }, 404);
     }
 
     const payload = await c.env.TENNODEV_WORLDSTATE_KV.get(runKey, "json");
 
     if (payload === null) {
-      return c.json({ ok: false, error: "translated payload not found", rootKey, lang, hash }, 404);
+      return c.json({ ok: false, error: "translated payload not found", rootKey, hash }, 404);
     }
 
     return c.json({ ok: true, payload });
