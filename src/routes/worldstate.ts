@@ -252,7 +252,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       .bind(runId)
       .all<QueueLogRow>();
 
-    const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+    const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
       .bind(runId)
       .all<{ rootKey: string }>();
 
@@ -324,7 +324,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
         .bind(run.runId)
         .all<QueueLogRow>();
 
-      const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+      const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
         .bind(run.runId)
         .all<{ rootKey: string }>();
 

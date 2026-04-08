@@ -28,7 +28,6 @@ async function ensurePipelineRunExecutionColumns(db: D1Database): Promise<void> 
 export async function ensureDiffTables(db: D1Database): Promise<void> {
   await db.prepare(SQL.createPipelineRunsTable).run();
   await ensurePipelineRunExecutionColumns(db);
-  await db.prepare(SQL.createPipelineDiffsTable).run();
   await db.prepare(SQL.createPipelineItemChangesTable).run();
 }
 
@@ -51,7 +50,7 @@ export async function pruneOldRuns(env: Bindings): Promise<void> {
 
   for (const row of oldRuns.results) {
     const runId = row.runId;
-    const diffRows = await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+    const diffRows = await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
       .bind(runId)
       .all<{ rootKey: string }>();
     const queueRows = await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueRootKeysByRun)
@@ -73,9 +72,6 @@ export async function pruneOldRuns(env: Bindings): Promise<void> {
     }
 
     await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deleteQueueLogsByRun)
-      .bind(runId)
-      .run();
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deletePipelineDiffsByRun)
       .bind(runId)
       .run();
     await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deletePipelineItemChangesByRun)
