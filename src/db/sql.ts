@@ -7,24 +7,19 @@ export const SQL = {
     "ALTER TABLE pipeline_runs ADD COLUMN started_at TEXT",
   alterPipelineRunsAddCompletedAt:
     "ALTER TABLE pipeline_runs ADD COLUMN completed_at TEXT",
-  createPipelineDiffsTable:
-    "CREATE TABLE IF NOT EXISTS pipeline_diffs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, root_key TEXT NOT NULL, previous_hash TEXT, next_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
   createPipelineItemChangesTable:
     "CREATE TABLE IF NOT EXISTS pipeline_item_changes (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, root_key TEXT NOT NULL, item_id TEXT NOT NULL, change_type TEXT NOT NULL, previous_hash TEXT, next_hash TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
   createTranslateQueueLogsTable:
     "CREATE TABLE IF NOT EXISTS translate_queue_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, root_key TEXT NOT NULL, payload_key TEXT NOT NULL, target_languages TEXT NOT NULL, payload_size INTEGER NOT NULL, status TEXT NOT NULL, error TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
   selectOldRunsBeyondRetention:
     "SELECT run_id as runId FROM pipeline_runs ORDER BY fetched_at DESC, run_id DESC LIMIT -1 OFFSET ?",
-  selectDiffRootKeysByRun:
-    "SELECT root_key as rootKey FROM pipeline_diffs WHERE run_id = ?",
+  selectChangedRootKeysByRun:
+    "SELECT DISTINCT root_key as rootKey FROM pipeline_item_changes WHERE run_id = ?",
   selectQueueRootKeysByRun:
     "SELECT root_key as rootKey FROM translate_queue_logs WHERE run_id = ?",
   deleteQueueLogsByRun: "DELETE FROM translate_queue_logs WHERE run_id = ?",
-  deletePipelineDiffsByRun: "DELETE FROM pipeline_diffs WHERE run_id = ?",
   deletePipelineItemChangesByRun: "DELETE FROM pipeline_item_changes WHERE run_id = ?",
   deletePipelineRunByRun: "DELETE FROM pipeline_runs WHERE run_id = ?",
-  insertPipelineDiff:
-    "INSERT INTO pipeline_diffs (run_id, root_key, previous_hash, next_hash) VALUES (?, ?, ?, ?)",
   insertPipelineItemChange:
     "INSERT INTO pipeline_item_changes (run_id, root_key, item_id, change_type, previous_hash, next_hash) VALUES (?, ?, ?, ?, ?, ?)",
   upsertPipelineRun:

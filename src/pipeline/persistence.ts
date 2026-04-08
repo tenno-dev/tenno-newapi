@@ -108,12 +108,6 @@ export async function persistWorldStateRun(
     changedRootKeys: input.changed.map((item) => item.rootKey),
   });
 
-  for (const item of input.changed) {
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineDiff)
-      .bind(input.runId, item.rootKey, item.previousHash, item.nextHash)
-      .run();
-  }
-
   for (const item of input.itemChanges) {
     await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange)
       .bind(input.runId, item.rootKey, item.itemId, item.changeType, item.previousHash, item.nextHash)
@@ -198,10 +192,6 @@ export async function writeRootChange(
     input.runId,
     input.payload
   );
-
-  await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineDiff)
-    .bind(input.runId, input.rootKey, input.previousHash, input.nextHash)
-    .run();
 
   for (const item of input.itemChanges) {
     await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange)
