@@ -3,6 +3,7 @@ import { Bindings, AppEnv } from "./app/types";
 import { registerCoreRoutes } from "./routes/core";
 import { registerWorldStateRoutes } from "./routes/worldstate";
 import { registerDebugRoutes } from "./routes/debug";
+import { registerPushRoutes } from "./routes/push";
 import { handleTranslateQueue } from "./queue/consumer";
 import { executeWorldStatePush } from "./pipeline/worldstate";
 import { executeTranslationSync } from "./pipeline/translations";
@@ -11,6 +12,7 @@ const app = new Hono<AppEnv>();
 
 registerCoreRoutes(app);
 registerWorldStateRoutes(app);
+registerPushRoutes(app);
 registerDebugRoutes(app);
 
 async function handleScheduled(env: Bindings): Promise<void> {

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { AppEnv } from "../app/types";
-import { buildCurrentTranslatedRootKey, buildTranslatedRootKey } from "../cache/keys";
+import { buildCurrentTranslatedRootKey, buildTranslatedHashIndexKey, buildTranslatedRootKey } from "../cache/keys";
 import { SQL } from "../db/sql";
 import { ensureDiffTables, ensureQueueTables } from "../pipeline/retention";
 import {
@@ -407,6 +407,28 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     const filtered = filterEventMessagesToLang(payload, lang);
 
     return c.json({ ok: true, rootKey, runId, lang, key, payload: filtered });
+  });
+
+  app.get("/worldstate/translated/:rootKey/hashes/:hash", async (c) => {
+    const rootKey = c.req.param("rootKey");
+    const hash = c.req.param("hash");
+    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase() || "en";
+
+    // Look up run key from hash index
+    const hashIndexKey = buildTranslatedHashIndexKey(rootKey, lang, hash);
+    const runKey = await c.env.TENNODEV_WORLDSTATE_KV.get(hashIndexKey);
+
+    if (!runKey) {
+      return c.json({ ok: false, error: "translated payload not found for hash", rootKey, lang, hash }, 404);
+    }
+
+    const payload = await c.env.TENNODEV_WORLDSTATE_KV.get(runKey, "json");
+
+    if (payload === null) {
+      return c.json({ ok: false, error: "translated payload not found", rootKey, lang, hash }, 404);
+    }
+
+    return c.json({ ok: true, payload });
   });
 
   app.get("/worldstate/stats", async (c) => {

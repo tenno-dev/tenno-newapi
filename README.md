@@ -70,9 +70,57 @@ All `/debug/*` routes return `403` outside dev.
 - Objects are diffed by top-level property key
 - Primitive roots are diffed as a single `value` item
 
-## Dummy Queue Cycle
+## Web Push Support
 
-- Target languages are fixed: `de, es, fr, it, ko, pl, pt, ru, zh, en, uk`
-- Cron triggers the wet push automatically each minute
-- Manual dry run in dev: `POST /debug/worldstate/push?dryRun=true`
-- Inspect processed queue jobs: `GET /debug/queue/index?limit=100`
+### VAPID Key Setup
+
+Generate a VAPID key pair (using any standard tool, e.g. `npx web-push generate-vapid-keys`):
+
+```
+Public Key: (base64url string)
+Private Key: (base64url string)
+```
+
+Set them as Worker secrets via Wrangler:
+
+```bash
+wrangler secret put VAPID_PUBLIC_KEY
+wrangler secret put VAPID_PRIVATE_KEY
+```
+
+### D1 Schema Migration
+
+Run the provided migration to create the push subscription tables:
+
+```bash
+wrangler d1 execute tennodev_worldstate --file=migrations/0001_push_subscriptions.sql
+```
+
+The tables are also created automatically at runtime by `ensurePushTables()` when the first push route or queue ping batch is processed.
+
+### Push API Endpoints
+
+- `GET /push/vapid-public-key` — returns the VAPID public key for the frontend to use with `PushManager.subscribe`
+- `POST /push/subscribe` — subscribe a browser for push notifications
+  - Body: `{ "subscription": { "endpoint": "...", "keys": { "p256dh": "...", "auth": "..." } }, "lang": "en", "rootKeys": ["Events", "*"] }`
+  - `rootKeys` can contain specific keys or `"*"` to receive all notifications
+- `POST /push/unsubscribe` — remove a subscription
+  - Body: `{ "endpoint": "..." }` or `{ "subscription": { "endpoint": "..." } }`
+
+### Hash-based Translated Payload Fetch
+
+After each translation is computed, a hash index entry is stored in KV mapping `(rootKey, lang, hash)` → run payload key (7-day TTL, aligned with translated run snapshot TTL).
+
+A new endpoint lets the Service Worker fetch the payload after receiving a ping:
+
+- `GET /worldstate/translated/:rootKey/hashes/:hash?lang=en` — returns `{ ok: true, payload: ... }` or 404 if expired
+
+### Push Notification Flow
+
+1. After each `worldstate.translate-root` completes, a `worldstate.translate-ping` message is enqueued with `{ rootKey, lang, hash }`.
+2. The queue consumer collects all ping messages in the batch, deduplicates by `(rootKey, lang, hash)`, then calls `sendWebPushBatch`.
+3. `sendWebPushBatch` queries D1 for subscriptions matching `(lang, rootKey)` (respecting `"*"` wildcard), then sends an encrypted VAPID Web Push to each endpoint with payload `{ rootKey, lang, hash }`.
+4. If the push service returns 404 or 410, the subscription is immediately removed from D1.
+5. The browser Service Worker receives the push, reads `{ rootKey, lang, hash }`, and fetches `GET /worldstate/translated/:rootKey/hashes/:hash?lang=:lang` to retrieve the translated payload.
+
+

@@ -1,6 +1,7 @@
 import { Bindings, TranslateQueueMessage } from "../app/types";
 import {
   buildCurrentTranslatedRootKey,
+  buildTranslatedHashIndexKey,
   buildTranslatedRootKey,
 } from "../cache/keys";
 import { saveCurrentTranslatedRootPayloadIfNewer } from "../cache/store";
@@ -160,9 +161,23 @@ export async function processTranslationMessage(
     const translated = applyObjectMergeTranslations(translatedStrings, objectIndex);
     const serialized = JSON.stringify(translated);
 
+    // Compute hash of translated payload for web push ping indexing
+    const hashBuffer = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(serialized)
+    );
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const translatedHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+
     // Per-run snapshot (expires after 7 days)
     const runKey = buildTranslatedRootKey(message.rootKey, lang, message.runId);
     await env.TENNODEV_WORLDSTATE_KV.put(runKey, serialized, {
+      expirationTtl: TRANSLATED_ROOT_TTL_SECONDS,
+    });
+
+    // Store KV index: (rootKey, lang, hash) => runKey (TTL aligned with run snapshot)
+    const hashIndexKey = buildTranslatedHashIndexKey(message.rootKey, lang, translatedHash);
+    await env.TENNODEV_WORLDSTATE_KV.put(hashIndexKey, runKey, {
       expirationTtl: TRANSLATED_ROOT_TTL_SECONDS,
     });
 
@@ -175,6 +190,16 @@ export async function processTranslationMessage(
       message.runId,
       message.fetchedAt
     );
+
+    // Enqueue ping notification for subscribed clients
+    await env.TENNODEV_PUSH_QUEUE.send({
+      type: "worldstate.translate-ping",
+      rootKey: message.rootKey,
+      lang,
+      hash: translatedHash,
+      runId: message.runId,
+      fetchedAt: message.fetchedAt,
+    });
   }
 
   // 3. Log success to D1
