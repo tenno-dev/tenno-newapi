@@ -3,7 +3,7 @@
  * Handles computing and comparing hashes for worldstate roots.
  */
 
-import { diffRootHashes, diffRootItems, hashRootValues, RootHashMap, stableStringify, hashString } from "../../tennodev/diff";
+import { diffRootHashes, diffRootItems, hashRootValues, RootDiffItem, RootHashMap, stableStringify, hashString } from "../../tennodev/diff";
 import { classifyPushCandidates } from "../classification";
 import { loadCurrentRootPayload } from "../../cache/store";
 import { TOP_LEVEL_WORLDSTATE_KEYS, RawWorldState } from "../../types/worldstate";
@@ -34,7 +34,7 @@ export async function analyzeWorldStateDiffs(
   force: boolean
 ): Promise<{
   nextHashes: RootHashMap;
-  changed: Array<{ rootKey: string; previousHash: string | null; nextHash: string; changed: boolean }>;
+  changed: RootDiffItem[];
   classification: { pushCandidateKeys: string[]; nonPushKeys: string[] };
 }> {
   const nextHashes = await hashRootValues(worldState);
