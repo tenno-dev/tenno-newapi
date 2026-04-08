@@ -15,6 +15,10 @@ export const SQL = {
     "SELECT run_id as runId FROM pipeline_runs ORDER BY fetched_at DESC, run_id DESC LIMIT -1 OFFSET ?",
   selectChangedRootKeysByRun:
     "SELECT DISTINCT root_key as rootKey FROM pipeline_item_changes WHERE run_id = ?",
+  selectItemChangesByRun:
+    "SELECT id, root_key as rootKey, item_id as itemId, change_type as changeType, previous_hash as previousHash, next_hash as nextHash, created_at as createdAt FROM pipeline_item_changes WHERE run_id = ? ORDER BY root_key ASC, item_id ASC",
+  selectItemChangesByRunAndRootKey:
+    "SELECT id, root_key as rootKey, item_id as itemId, change_type as changeType, previous_hash as previousHash, next_hash as nextHash, created_at as createdAt FROM pipeline_item_changes WHERE run_id = ? AND root_key = ? ORDER BY item_id ASC",
   selectQueueRootKeysByRun:
     "SELECT root_key as rootKey FROM translate_queue_logs WHERE run_id = ?",
   deleteQueueLogsByRun: "DELETE FROM translate_queue_logs WHERE run_id = ?",
