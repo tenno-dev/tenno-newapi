@@ -2,17 +2,14 @@ import { RawWorldState } from "../types/worldstate";
 
 export type RootHashMap = Record<string, string>;
 
-export type RootDiffChangeType = "new" | "changed";
-
 export type RootDiffItem = {
   rootKey: string;
   previousHash: string | null;
   nextHash: string;
   changed: boolean;
-  changeType: RootDiffChangeType;
 };
 
-export type RootItemChangeType = "added" | "removed" | "updated";
+export type RootItemChangeType = "new" | "changed" | "removed";
 
 export type RootItemChange = {
   rootKey: string;
@@ -124,7 +121,7 @@ export async function diffRootItems(
     const nextHash = nextMap.get(itemId) ?? null;
 
     if (previousHash === null && nextHash !== null) {
-      changes.push({ rootKey, itemId, changeType: "added", previousHash, nextHash });
+      changes.push({ rootKey, itemId, changeType: "new", previousHash, nextHash });
       continue;
     }
 
@@ -134,7 +131,7 @@ export async function diffRootItems(
     }
 
     if (previousHash !== nextHash) {
-      changes.push({ rootKey, itemId, changeType: "updated", previousHash, nextHash });
+      changes.push({ rootKey, itemId, changeType: "changed", previousHash, nextHash });
     }
   }
 
@@ -164,14 +161,12 @@ export function diffRootHashes(
     const previousHash = previousHashes[rootKey] ?? null;
     const nextHash = nextHashes[rootKey] ?? "";
     const changed = force || previousHash !== nextHash;
-    const changeType: RootDiffChangeType = previousHash === null ? "new" : "changed";
 
     return {
       rootKey,
       previousHash,
       nextHash,
       changed,
-      changeType,
     };
   });
 }
