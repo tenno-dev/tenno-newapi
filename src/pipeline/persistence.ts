@@ -110,7 +110,7 @@ export async function persistWorldStateRun(
 
   for (const item of input.changed) {
     await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineDiff)
-      .bind(input.runId, item.rootKey, item.previousHash, item.nextHash, item.changeType)
+      .bind(input.runId, item.rootKey, item.previousHash, item.nextHash)
       .run();
   }
 
@@ -188,7 +188,6 @@ export async function writeRootChange(
     rootKey: string;
     previousHash: string | null;
     nextHash: string;
-    changeType: "new" | "changed";
     payload: string;
     itemChanges: RootItemChange[];
   }
@@ -201,7 +200,7 @@ export async function writeRootChange(
   );
 
   await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineDiff)
-    .bind(input.runId, input.rootKey, input.previousHash, input.nextHash, input.changeType)
+    .bind(input.runId, input.rootKey, input.previousHash, input.nextHash)
     .run();
 
   for (const item of input.itemChanges) {
@@ -283,23 +282,23 @@ export async function getPipelineRunCount(db: D1Database): Promise<number> {
 export async function getItemChangeStats(
   db: D1Database,
   days: number
-): Promise<Array<{ rootKey: string; changedItems: number; added: number; removed: number; updated: number }>> {
+): Promise<Array<{ rootKey: string; changedItems: number; new: number; removed: number; changed: number }>> {
   await ensureDiffTables(db);
   const window = `-${days} days`;
   const result = await db.prepare(SQL.selectItemChangeStatsByDays).bind(window).all<{
     rootKey: string;
     changedItems: number;
-    added: number;
+    new: number;
     removed: number;
-    updated: number;
+    changed: number;
   }>();
 
   return result.results.map((row) => ({
     rootKey: row.rootKey,
     changedItems: Number(row.changedItems ?? 0),
-    added: Number(row.added ?? 0),
+    new: Number(row.new ?? 0),
     removed: Number(row.removed ?? 0),
-    updated: Number(row.updated ?? 0),
+    changed: Number(row.changed ?? 0),
   }));
 }
 
@@ -307,16 +306,16 @@ export async function getItemChangeDailyStats(
   db: D1Database,
   days: number,
   rootKey?: string
-): Promise<Array<{ day: string; rootKey: string; changedItems: number; added: number; removed: number; updated: number }>> {
+): Promise<Array<{ day: string; rootKey: string; changedItems: number; new: number; removed: number; changed: number }>> {
   await ensureDiffTables(db);
   const window = `-${days} days`;
   const result = await db.prepare(SQL.selectItemChangeDailyStatsByDays).bind(window).all<{
     day: string;
     rootKey: string;
     changedItems: number;
-    added: number;
+    new: number;
     removed: number;
-    updated: number;
+    changed: number;
   }>();
 
   return result.results
@@ -325,9 +324,9 @@ export async function getItemChangeDailyStats(
       day: row.day,
       rootKey: row.rootKey,
       changedItems: Number(row.changedItems ?? 0),
-      added: Number(row.added ?? 0),
+      new: Number(row.new ?? 0),
       removed: Number(row.removed ?? 0),
-      updated: Number(row.updated ?? 0),
+      changed: Number(row.changed ?? 0),
     }));
 }
 

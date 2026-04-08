@@ -30,13 +30,6 @@ export async function ensureDiffTables(db: D1Database): Promise<void> {
   await ensurePipelineRunExecutionColumns(db);
   await db.prepare(SQL.createPipelineDiffsTable).run();
   await db.prepare(SQL.createPipelineItemChangesTable).run();
-
-  // Add change_type column to existing pipeline_diffs tables
-  try {
-    await db.prepare(SQL.alterPipelineDiffsAddChangeType).run();
-  } catch {
-    // Column already exists.
-  }
 }
 
 export async function ensureQueueTables(db: D1Database): Promise<void> {

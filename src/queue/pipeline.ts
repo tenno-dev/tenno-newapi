@@ -106,7 +106,6 @@ export async function handleProcessWorldStateRoot(
     rootKey: message.rootKey,
     previousHash: message.previousHash,
     nextHash: message.nextHash,
-    changeType: message.previousHash === null ? "new" : "changed",
     payload,
     itemChanges,
   });

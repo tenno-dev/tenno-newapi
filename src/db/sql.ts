@@ -8,9 +8,7 @@ export const SQL = {
   alterPipelineRunsAddCompletedAt:
     "ALTER TABLE pipeline_runs ADD COLUMN completed_at TEXT",
   createPipelineDiffsTable:
-    "CREATE TABLE IF NOT EXISTS pipeline_diffs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, root_key TEXT NOT NULL, previous_hash TEXT, next_hash TEXT NOT NULL, change_type TEXT NOT NULL DEFAULT 'changed', created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
-  alterPipelineDiffsAddChangeType:
-    "ALTER TABLE pipeline_diffs ADD COLUMN change_type TEXT NOT NULL DEFAULT 'changed'",
+    "CREATE TABLE IF NOT EXISTS pipeline_diffs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, root_key TEXT NOT NULL, previous_hash TEXT, next_hash TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
   createPipelineItemChangesTable:
     "CREATE TABLE IF NOT EXISTS pipeline_item_changes (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, root_key TEXT NOT NULL, item_id TEXT NOT NULL, change_type TEXT NOT NULL, previous_hash TEXT, next_hash TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
   createTranslateQueueLogsTable:
@@ -26,16 +24,16 @@ export const SQL = {
   deletePipelineItemChangesByRun: "DELETE FROM pipeline_item_changes WHERE run_id = ?",
   deletePipelineRunByRun: "DELETE FROM pipeline_runs WHERE run_id = ?",
   insertPipelineDiff:
-    "INSERT INTO pipeline_diffs (run_id, root_key, previous_hash, next_hash, change_type) VALUES (?, ?, ?, ?, ?)",
+    "INSERT INTO pipeline_diffs (run_id, root_key, previous_hash, next_hash) VALUES (?, ?, ?, ?)",
   insertPipelineItemChange:
     "INSERT INTO pipeline_item_changes (run_id, root_key, item_id, change_type, previous_hash, next_hash) VALUES (?, ?, ?, ?, ?, ?)",
   upsertPipelineRun:
     "INSERT OR REPLACE INTO pipeline_runs (run_id, fetched_at, source_version, changed_count, dry_run, queued_count, execution_status, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   countPipelineRuns: "SELECT COUNT(*) as count FROM pipeline_runs",
   selectItemChangeStatsByDays:
-    "SELECT root_key as rootKey, COUNT(*) as changedItems, SUM(CASE WHEN change_type = 'added' THEN 1 ELSE 0 END) as added, SUM(CASE WHEN change_type = 'removed' THEN 1 ELSE 0 END) as removed, SUM(CASE WHEN change_type = 'updated' THEN 1 ELSE 0 END) as updated FROM pipeline_item_changes WHERE created_at >= datetime('now', ?) GROUP BY root_key ORDER BY changedItems DESC, rootKey ASC",
+    "SELECT root_key as rootKey, COUNT(*) as changedItems, SUM(CASE WHEN change_type = 'new' THEN 1 ELSE 0 END) as new, SUM(CASE WHEN change_type = 'removed' THEN 1 ELSE 0 END) as removed, SUM(CASE WHEN change_type = 'changed' THEN 1 ELSE 0 END) as changed FROM pipeline_item_changes WHERE created_at >= datetime('now', ?) GROUP BY root_key ORDER BY changedItems DESC, rootKey ASC",
   selectItemChangeDailyStatsByDays:
-    "SELECT date(created_at) as day, root_key as rootKey, COUNT(*) as changedItems, SUM(CASE WHEN change_type = 'added' THEN 1 ELSE 0 END) as added, SUM(CASE WHEN change_type = 'removed' THEN 1 ELSE 0 END) as removed, SUM(CASE WHEN change_type = 'updated' THEN 1 ELSE 0 END) as updated FROM pipeline_item_changes WHERE created_at >= datetime('now', ?) GROUP BY date(created_at), root_key ORDER BY day ASC, rootKey ASC",
+    "SELECT date(created_at) as day, root_key as rootKey, COUNT(*) as changedItems, SUM(CASE WHEN change_type = 'new' THEN 1 ELSE 0 END) as new, SUM(CASE WHEN change_type = 'removed' THEN 1 ELSE 0 END) as removed, SUM(CASE WHEN change_type = 'changed' THEN 1 ELSE 0 END) as changed FROM pipeline_item_changes WHERE created_at >= datetime('now', ?) GROUP BY date(created_at), root_key ORDER BY day ASC, rootKey ASC",
   insertTranslateQueueLog:
     "INSERT INTO translate_queue_logs (run_id, root_key, payload_key, target_languages, payload_size, status, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
   selectQueueLogs:
