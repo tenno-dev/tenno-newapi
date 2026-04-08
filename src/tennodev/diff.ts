@@ -2,11 +2,14 @@ import { RawWorldState } from "../types/worldstate";
 
 export type RootHashMap = Record<string, string>;
 
+export type RootDiffChangeType = "new" | "changed";
+
 export type RootDiffItem = {
   rootKey: string;
   previousHash: string | null;
   nextHash: string;
   changed: boolean;
+  changeType: RootDiffChangeType;
 };
 
 export type RootItemChangeType = "added" | "removed" | "updated";
@@ -161,12 +164,14 @@ export function diffRootHashes(
     const previousHash = previousHashes[rootKey] ?? null;
     const nextHash = nextHashes[rootKey] ?? "";
     const changed = force || previousHash !== nextHash;
+    const changeType: RootDiffChangeType = previousHash === null ? "new" : "changed";
 
     return {
       rootKey,
       previousHash,
       nextHash,
       changed,
+      changeType,
     };
   });
 }
