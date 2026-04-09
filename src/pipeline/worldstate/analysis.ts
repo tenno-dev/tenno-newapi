@@ -3,9 +3,9 @@
  * Handles computing and comparing hashes for worldstate roots.
  */
 
-import { diffRootHashes, diffRootItems, hashRootValues, RootHashMap, stableStringify, hashString } from "../../tennodev/diff";
+import { diffRootHashes, hashRootValues, RootHashMap, stableStringify, hashString } from "../../tennodev/diff";
 import { classifyPushCandidates } from "../classification";
-import { loadCurrentRootPayload } from "../../cache/store";
+import { loadCurrentRootPayload, loadRootHashes, saveRootHashes } from "../../cache/store";
 import { TOP_LEVEL_WORLDSTATE_KEYS, RawWorldState } from "../../types/worldstate";
 
 export async function loadCurrentRootHashes(kv: KVNamespace): Promise<RootHashMap> {
@@ -38,9 +38,19 @@ export async function analyzeWorldStateDiffs(
   classification: { pushCandidateKeys: string[]; nonPushKeys: string[] };
 }> {
   const nextHashes = await hashRootValues(worldState);
-  const previousHashes = await loadCurrentRootHashes(kv);
+
+  // Use the persisted hash index when available (single KV read instead of one per root key).
+  // Fall back to recomputing from individual root payloads on first run or after expiry.
+  let previousHashes = await loadRootHashes(kv);
+  if (Object.keys(previousHashes).length === 0) {
+    previousHashes = await loadCurrentRootHashes(kv);
+  }
+
   const diffs = diffRootHashes(previousHashes, nextHashes, force);
   const changed = diffs.filter((item: any) => item.changed);
+
+  // Persist the new hashes so the next run only needs a single KV read.
+  await saveRootHashes(kv, nextHashes);
 
   return {
     nextHashes,
