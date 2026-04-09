@@ -114,10 +114,19 @@ export async function persistWorldStateRun(
       .run();
   }
 
-  for (const item of input.itemChanges) {
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange)
-      .bind(input.runId, item.rootKey, item.itemId, item.changeType, item.previousHash, item.nextHash)
-      .run();
+  if (input.itemChanges.length > 0) {
+    await env.TENNODEV_WORLDSTATE_D1.batch(
+      input.itemChanges.map((item) =>
+        env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange).bind(
+          input.runId,
+          item.rootKey,
+          item.itemId,
+          item.changeType,
+          item.previousHash,
+          item.nextHash
+        )
+      )
+    );
   }
 
   return { rawSnapshotKey, changedPayloadKeys };
@@ -203,10 +212,19 @@ export async function writeRootChange(
     .bind(input.runId, input.rootKey, input.previousHash, input.nextHash)
     .run();
 
-  for (const item of input.itemChanges) {
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange)
-      .bind(input.runId, item.rootKey, item.itemId, item.changeType, item.previousHash, item.nextHash)
-      .run();
+  if (input.itemChanges.length > 0) {
+    await env.TENNODEV_WORLDSTATE_D1.batch(
+      input.itemChanges.map((item) =>
+        env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange).bind(
+          input.runId,
+          item.rootKey,
+          item.itemId,
+          item.changeType,
+          item.previousHash,
+          item.nextHash
+        )
+      )
+    );
   }
 
   return kvKey;
