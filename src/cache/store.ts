@@ -197,8 +197,7 @@ export async function saveCurrentRootPayloadIfNewer(
     return { key, updated: false };
   }
 
-  await kv.put(key, payload);
-  await saveCursor(kv, cursorKey, incoming);
+  await Promise.all([kv.put(key, payload), saveCursor(kv, cursorKey, incoming)]);
   return { key, updated: true };
 }
 
@@ -239,8 +238,7 @@ export async function saveCurrentTranslatedRootPayloadIfNewer(
     return { key, updated: false };
   }
 
-  await kv.put(key, payload);
-  await saveCursor(kv, cursorKey, incoming);
+  await Promise.all([kv.put(key, payload), saveCursor(kv, cursorKey, incoming)]);
   return { key, updated: true };
 }
 

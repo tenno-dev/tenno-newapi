@@ -11,9 +11,11 @@ import { buildWorldStateStatusModel } from "../read-models";
 import { loadCurrentRootHashes } from "./analysis";
 
 export async function getWorldStateStatus(c: AppContext) {
-  const latestRun = await loadLatestRunMeta(c.env.TENNODEV_WORLDSTATE_KV);
-  const rootHashes = await loadCurrentRootHashes(c.env.TENNODEV_WORLDSTATE_KV);
-  const totalRuns = await getPipelineRunCount(c.env.TENNODEV_WORLDSTATE_D1);
+  const [latestRun, rootHashes, totalRuns] = await Promise.all([
+    loadLatestRunMeta(c.env.TENNODEV_WORLDSTATE_KV),
+    loadCurrentRootHashes(c.env.TENNODEV_WORLDSTATE_KV),
+    getPipelineRunCount(c.env.TENNODEV_WORLDSTATE_D1),
+  ]);
   const configuredSource = c.env.WORLDSTATE_SOURCE_URL?.trim();
 
   return buildWorldStateStatusModel({
