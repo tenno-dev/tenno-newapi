@@ -136,7 +136,7 @@ export async function processTranslationMessage(
 
   // 2. Fetch all R2 indexes for all languages in parallel.
   const langs = message.targetLanguages;
-  const r2Pairs = await Promise.all(
+  let r2Pairs = await Promise.all(
     langs.map(async (lang) => ({
       lang,
       indexObject: await env.TENNODEV_ASSETS_R2.get(translationIndexR2Key(lang)),
@@ -149,15 +149,19 @@ export async function processTranslationMessage(
   if (anyMissing) {
     await ensureTranslationSyncInitialized(env);
 
-    // Re-fetch only the languages that were missing.
-    await Promise.all(
+    // Re-fetch only the languages that were missing, returning a fresh object per pair.
+    r2Pairs = await Promise.all(
       r2Pairs.map(async (p) => {
-        if (!p.indexObject || !p.objectIndexObject) {
-          p.indexObject = await env.TENNODEV_ASSETS_R2.get(translationIndexR2Key(p.lang));
-          p.objectIndexObject = await env.TENNODEV_ASSETS_R2.get(
-            translationObjectIndexR2Key(p.lang)
-          );
+        if (p.indexObject && p.objectIndexObject) {
+          return p;
         }
+        return {
+          lang: p.lang,
+          indexObject: await env.TENNODEV_ASSETS_R2.get(translationIndexR2Key(p.lang)),
+          objectIndexObject: await env.TENNODEV_ASSETS_R2.get(
+            translationObjectIndexR2Key(p.lang)
+          ),
+        };
       })
     );
   }
