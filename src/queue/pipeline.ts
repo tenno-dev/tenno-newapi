@@ -111,14 +111,16 @@ export async function handleProcessWorldStateRoot(
   });
 
   if (hasRootKey) {
-    await saveCurrentRootPayloadIfNewer(
-      env.TENNODEV_WORLDSTATE_KV,
-      message.rootKey,
-      payload,
-      message.runId,
-      message.fetchedAt
-    );
-    await saveLastKnownRootPayload(env.TENNODEV_WORLDSTATE_KV, message.rootKey, payload);
+    await Promise.all([
+      saveCurrentRootPayloadIfNewer(
+        env.TENNODEV_WORLDSTATE_KV,
+        message.rootKey,
+        payload,
+        message.runId,
+        message.fetchedAt
+      ),
+      saveLastKnownRootPayload(env.TENNODEV_WORLDSTATE_KV, message.rootKey, payload),
+    ]);
 
     const translateMessages = buildTranslateQueueMessages(
       {
