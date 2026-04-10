@@ -105,13 +105,14 @@ export async function diffRootItems(
   const previousMap = new Map<string, string>();
   const nextMap = new Map<string, string>();
 
-  for (const item of previousItems) {
-    previousMap.set(item.itemId, await hashValue(item.value));
-  }
-
-  for (const item of nextItems) {
-    nextMap.set(item.itemId, await hashValue(item.value));
-  }
+  await Promise.all([
+    Promise.all(previousItems.map(async (item) => {
+      previousMap.set(item.itemId, await hashValue(item.value));
+    })),
+    Promise.all(nextItems.map(async (item) => {
+      nextMap.set(item.itemId, await hashValue(item.value));
+    })),
+  ]);
 
   const itemIds = new Set([...previousMap.keys(), ...nextMap.keys()]);
   const changes: RootItemChange[] = [];
@@ -142,8 +143,11 @@ export async function hashRootValues(worldState: RawWorldState): Promise<RootHas
   const hashes: RootHashMap = {};
   const keys = Object.keys(worldState).sort((a, b) => a.localeCompare(b));
 
-  for (const key of keys) {
-    hashes[key] = await hashString(stableStringify(worldState[key]));
+  const entries = await Promise.all(
+    keys.map(async (key) => [key, await hashString(stableStringify(worldState[key]))] as const)
+  );
+  for (const [key, hash] of entries) {
+    hashes[key] = hash;
   }
 
   return hashes;
