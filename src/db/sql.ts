@@ -86,6 +86,18 @@ export const SQL = {
     "DELETE FROM push_subscription_rootkeys WHERE subscription_id = (SELECT id FROM push_subscriptions WHERE endpoint = ?)",
   deletePushSubscriptionSubKeysByEndpoint:
     "DELETE FROM push_subscription_subkeys WHERE subscription_id = (SELECT id FROM push_subscriptions WHERE endpoint = ?)",
+  selectAllPushSubscriptions:
+    "SELECT id, endpoint, p256dh, auth, lang, created_at as createdAt, updated_at as updatedAt, last_seen_at as lastSeenAt, disabled_at as disabledAt FROM push_subscriptions ORDER BY updated_at DESC, created_at DESC",
+  selectAllPushSubscriptionRootKeys:
+    "SELECT subscription_id as subscriptionId, root_key as rootKey FROM push_subscription_rootkeys ORDER BY subscription_id ASC, root_key ASC",
+  selectAllPushSubscriptionSubKeys:
+    "SELECT subscription_id as subscriptionId, root_key as rootKey, sub_key as subKey FROM push_subscription_subkeys ORDER BY subscription_id ASC, root_key ASC, sub_key ASC",
+  deleteAllPushSubscriptionSubKeys:
+    "DELETE FROM push_subscription_subkeys",
+  deleteAllPushSubscriptionRootKeys:
+    "DELETE FROM push_subscription_rootkeys",
+  deleteAllPushSubscriptions:
+    "DELETE FROM push_subscriptions",
   selectMatchingPushSubscriptionsWithSubKeys:
-    "SELECT s.id, s.endpoint, s.p256dh, s.auth, s.lang, COUNT(sk.sub_key) as subKeyCount, GROUP_CONCAT(sk.sub_key) as subKeysCsv FROM push_subscriptions s JOIN push_subscription_rootkeys k ON k.subscription_id = s.id LEFT JOIN push_subscription_subkeys sk ON sk.subscription_id = s.id AND sk.root_key = ? WHERE s.disabled_at IS NULL AND s.lang = ? AND (k.root_key = ? OR k.root_key = '*') GROUP BY s.id, s.endpoint, s.p256dh, s.auth, s.lang",
+    "SELECT s.id, s.endpoint, s.p256dh, s.auth, s.lang, COUNT(sk.sub_key) as subKeyCount, GROUP_CONCAT(sk.sub_key) as subKeysCsv FROM push_subscriptions s JOIN push_subscription_rootkeys k ON k.subscription_id = s.id LEFT JOIN push_subscription_subkeys sk ON sk.subscription_id = s.id AND LOWER(sk.root_key) = LOWER(?) WHERE s.disabled_at IS NULL AND s.lang = ? AND (LOWER(k.root_key) = LOWER(?) OR k.root_key = '*') GROUP BY s.id, s.endpoint, s.p256dh, s.auth, s.lang",
 } as const;

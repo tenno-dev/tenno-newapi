@@ -194,7 +194,7 @@ async function sendWebPush(
   payload: object,
   vapidPublicKey: string,
   vapidPrivateKey: string
-): Promise<{ ok: boolean; status: number; gone: boolean }> {
+): Promise<{ ok: boolean; status: number; gone: boolean; responseText: string }> {
   const endpointUrl = new URL(subscription.endpoint);
   const audience = `${endpointUrl.protocol}//${endpointUrl.host}`;
 
@@ -214,7 +214,8 @@ async function sendWebPush(
   });
 
   const gone = response.status === 404 || response.status === 410;
-  return { ok: response.ok, status: response.status, gone };
+  const responseText = await response.text();
+  return { ok: response.ok, status: response.status, gone, responseText };
 }
 
 export async function sendWebPushBatch(env: Bindings, pings: TranslatePingMessage[]): Promise<void> {
@@ -277,6 +278,19 @@ export async function sendWebPushBatch(env: Bindings, pings: TranslatePingMessag
             env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deletePushSubscriptionRootKeysByEndpoint).bind(sub.endpoint),
             env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deletePushSubscriptionByEndpoint).bind(sub.endpoint),
           ]);
+          continue;
+        }
+
+        if (!outcome.ok) {
+          const detail = `[webpush] provider rejected push (${outcome.status}) for ${sub.endpoint}: ${outcome.responseText.slice(0, 500)}`;
+
+          // Retry transient upstream failures by bubbling up to queue consumer retry logic.
+          if (outcome.status === 429 || outcome.status >= 500) {
+            throw new Error(detail);
+          }
+
+          // Permanent 4xx-type failures are logged and skipped for this cycle.
+          console.error(detail);
         }
       } catch (err) {
         console.error(`[webpush] send failed for ${sub.endpoint}:`, err instanceof Error ? err.message : String(err));

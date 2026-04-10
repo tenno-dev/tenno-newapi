@@ -79,6 +79,17 @@ function isAllowedOrigin(c: Context<AppEnv>): boolean {
   return allowed.has(origin);
 }
 
+function isAuthorizedPushAdmin(c: Context<AppEnv>): boolean {
+  const configured = (c.env.PUSH_ADMIN_TOKEN ?? c.env.DEPLOY_TRIGGER_TOKEN ?? "").trim();
+  if (!configured) {
+    return false;
+  }
+
+  const authHeader = c.req.header("authorization") ?? "";
+  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  return bearerToken === configured;
+}
+
 export const pushRoutes = new Hono<AppEnv>();
 
 pushRoutes.get("/push/public-key", async (c) => {
@@ -88,6 +99,84 @@ pushRoutes.get("/push/public-key", async (c) => {
   }
 
   return c.json({ ok: true, publicKey });
+});
+
+pushRoutes.get("/push/subscriptions", async (c) => {
+  if (!isAuthorizedPushAdmin(c)) {
+    return c.json({ ok: false, error: "unauthorized" }, 401);
+  }
+
+  await ensurePushTables(c.env.TENNODEV_WORLDSTATE_D1);
+
+  type SubscriptionRow = {
+    id: string;
+    endpoint: string;
+    p256dh: string;
+    auth: string;
+    lang: string;
+    createdAt: string;
+    updatedAt: string;
+    lastSeenAt: string | null;
+    disabledAt: string | null;
+  };
+
+  type RootKeyRow = { subscriptionId: string; rootKey: string };
+  type SubKeyRow = { subscriptionId: string; rootKey: string; subKey: string };
+
+  const [subsResult, rootKeysResult, subKeysResult] = await Promise.all([
+    c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectAllPushSubscriptions).all<SubscriptionRow>(),
+    c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectAllPushSubscriptionRootKeys).all<RootKeyRow>(),
+    c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectAllPushSubscriptionSubKeys).all<SubKeyRow>(),
+  ]);
+
+  const rootKeysById = new Map<string, string[]>();
+  for (const row of rootKeysResult.results) {
+    const arr = rootKeysById.get(row.subscriptionId) ?? [];
+    arr.push(row.rootKey);
+    rootKeysById.set(row.subscriptionId, arr);
+  }
+
+  const subKeysById = new Map<string, Record<string, string[]>>();
+  for (const row of subKeysResult.results) {
+    const byRoot = subKeysById.get(row.subscriptionId) ?? {};
+    const arr = byRoot[row.rootKey] ?? [];
+    arr.push(row.subKey);
+    byRoot[row.rootKey] = arr;
+    subKeysById.set(row.subscriptionId, byRoot);
+  }
+
+  const subscriptions = subsResult.results.map((row) => ({
+    id: row.id,
+    endpoint: row.endpoint,
+    lang: row.lang,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    lastSeenAt: row.lastSeenAt,
+    disabledAt: row.disabledAt,
+    rootKeys: rootKeysById.get(row.id) ?? [],
+    subKeyFilters: subKeysById.get(row.id) ?? {},
+  }));
+
+  return c.json({
+    ok: true,
+    count: subscriptions.length,
+    subscriptions,
+  });
+});
+
+pushRoutes.post("/push/subscriptions/clear", async (c) => {
+  if (!isAuthorizedPushAdmin(c)) {
+    return c.json({ ok: false, error: "unauthorized" }, 401);
+  }
+
+  await ensurePushTables(c.env.TENNODEV_WORLDSTATE_D1);
+  await c.env.TENNODEV_WORLDSTATE_D1.batch([
+    c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deleteAllPushSubscriptionSubKeys),
+    c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deleteAllPushSubscriptionRootKeys),
+    c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deleteAllPushSubscriptions),
+  ]);
+
+  return c.json({ ok: true, cleared: true });
 });
 
 function normalizeSubKeyFilters(

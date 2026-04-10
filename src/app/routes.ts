@@ -16,6 +16,8 @@ export const ACTIVE_ROUTES = [
   "GET /worldstate/stats",
   "GET /worldstate/stats/daily",
   "GET /push/public-key",
+  "GET /push/subscriptions",
+  "POST /push/subscriptions/clear",
   "POST /push/subscribe",
   "POST /push/unsubscribe",
   // debug — dev only
