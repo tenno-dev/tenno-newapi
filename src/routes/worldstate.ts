@@ -239,23 +239,24 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "runId is required" }, 400);
     }
 
-    await ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1);
-    await ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1);
+    await Promise.all([
+      ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1),
+      ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1),
+    ]);
 
-    const runResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectPipelineRunById)
-      .bind(runId)
-      .all<PipelineRunRow>();
+    const [runResult, queueResult, diffResult] = await Promise.all([
+      c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectPipelineRunById)
+        .bind(runId)
+        .all<PipelineRunRow>(),
+      c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
+        .bind(runId)
+        .all<QueueLogRow>(),
+      c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+        .bind(runId)
+        .all<{ rootKey: string }>(),
+    ]);
 
     const run = runResult.results[0] ?? null;
-
-    const queueResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
-      .bind(runId)
-      .all<QueueLogRow>();
-
-    const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
-      .bind(runId)
-      .all<{ rootKey: string }>();
-
     const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
 
     const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
@@ -285,8 +286,10 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
   });
 
   app.get("/worldstate/runs/current", async (c) => {
-    await ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1);
-    await ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1);
+    await Promise.all([
+      ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1),
+      ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1),
+    ]);
 
     const limitParam = Number.parseInt(c.req.query("limit") ?? "20", 10);
     const limit = Number.isNaN(limitParam) ? 20 : Math.max(1, Math.min(100, limitParam));
@@ -299,58 +302,41 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "no runs found" }, 404);
     }
 
-    const summaries: Array<{
-      run: PipelineRunRow;
-      queue: {
-        queued: number;
-        queuedKeys: string[];
-        queuedKeysCount: number;
-        processed: number;
-        failed: number;
-        pending: number;
-        status: string;
-        isActive: boolean;
-        startedAt: string | null;
-        endedAt: string | null;
-        activeDurationSec: number | null;
-        progress: number;
-        progressPercent: number;
-      };
-      errorRootKeys: Array<{ rootKey: string; error: string }>;
-    }> = [];
+    const summaries = await Promise.all(
+      recentResult.results.map(async (run) => {
+        const [queueResult, diffResult] = await Promise.all([
+          c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
+            .bind(run.runId)
+            .all<QueueLogRow>(),
+          c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+            .bind(run.runId)
+            .all<{ rootKey: string }>(),
+        ]);
 
-    for (const run of recentResult.results) {
-      const queueResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
-        .bind(run.runId)
-        .all<QueueLogRow>();
+        const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
+        const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
 
-      const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
-        .bind(run.runId)
-        .all<{ rootKey: string }>();
-
-      const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
-
-      const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
-      summaries.push({
-        run,
-        queue: {
-          queued: queue.queued,
-          queuedKeys: queue.queuedKeys,
-          queuedKeysCount: queue.queuedKeysCount,
-          processed: queue.processed,
-          failed: queue.failed,
-          pending: queue.pending,
-          status: queue.status,
-          isActive: queue.isActive,
-          startedAt: queue.startedAt,
-          endedAt: queue.endedAt,
-          activeDurationSec: queue.activeDurationSec,
-          progress: queue.progress,
-          progressPercent: queue.progressPercent,
-        },
-        errorRootKeys: queue.errorRootKeys,
-      });
-    }
+        return {
+          run,
+          queue: {
+            queued: queue.queued,
+            queuedKeys: queue.queuedKeys,
+            queuedKeysCount: queue.queuedKeysCount,
+            processed: queue.processed,
+            failed: queue.failed,
+            pending: queue.pending,
+            status: queue.status,
+            isActive: queue.isActive,
+            startedAt: queue.startedAt,
+            endedAt: queue.endedAt,
+            activeDurationSec: queue.activeDurationSec,
+            progress: queue.progress,
+            progressPercent: queue.progressPercent,
+          },
+          errorRootKeys: queue.errorRootKeys,
+        };
+      })
+    );
 
     const active = summaries.find((item) => item.queue.pending > 0) ?? null;
     const latestCompleted = summaries.find((item) => item.queue.pending === 0) ?? null;

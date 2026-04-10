@@ -24,9 +24,9 @@ export const SQL = {
   deletePipelineItemChangesByRun: "DELETE FROM pipeline_item_changes WHERE run_id = ?",
   deletePipelineRunByRun: "DELETE FROM pipeline_runs WHERE run_id = ?",
   insertPipelineDiff:
-    "INSERT INTO pipeline_diffs (run_id, root_key, previous_hash, next_hash) VALUES (?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO pipeline_diffs (run_id, root_key, previous_hash, next_hash) VALUES (?, ?, ?, ?)",
   insertPipelineItemChange:
-    "INSERT INTO pipeline_item_changes (run_id, root_key, item_id, change_type, previous_hash, next_hash) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO pipeline_item_changes (run_id, root_key, item_id, change_type, previous_hash, next_hash) VALUES (?, ?, ?, ?, ?, ?)",
   upsertPipelineRun:
     "INSERT OR REPLACE INTO pipeline_runs (run_id, fetched_at, source_version, changed_count, dry_run, queued_count, execution_status, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   countPipelineRuns: "SELECT COUNT(*) as count FROM pipeline_runs",
