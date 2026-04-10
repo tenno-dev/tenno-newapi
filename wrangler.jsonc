@@ -12,8 +12,14 @@
       "invocation_logs": true,
     },
   },
+  "routes": [
+    {
+      "pattern": "api.tenno.dev",
+      "custom_domain": true,
+    },
+  ],
   "vars": {
-    "WORLDSTATE_SOURCE_URL": "https://api2.mediathek.community/worldstate"
+    "WORLDSTATE_SOURCE_URL": "https://api2.mediathek.community/worldstate",
   },
   "kv_namespaces": [
     {
