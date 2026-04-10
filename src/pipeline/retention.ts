@@ -38,6 +38,12 @@ export async function ensureQueueTables(db: D1Database): Promise<void> {
   await db.prepare(SQL.createTranslateQueueLogsTable).run();
 }
 
+export async function ensurePushTables(db: D1Database): Promise<void> {
+  await db.prepare(SQL.createPushSubscriptionsTable).run();
+  await db.prepare(SQL.createPushSubscriptionRootKeysTable).run();
+  await db.prepare(SQL.createPushSubscriptionSubKeysTable).run();
+}
+
 export async function pruneOldRuns(env: Bindings): Promise<void> {
   await Promise.all([
     ensureDiffTables(env.TENNODEV_WORLDSTATE_D1),
@@ -51,7 +57,7 @@ export async function pruneOldRuns(env: Bindings): Promise<void> {
   for (const row of oldRuns.results) {
     const runId = row.runId;
     const [diffRows, queueRows] = await Promise.all([
-      env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+      env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
         .bind(runId)
         .all<{ rootKey: string }>(),
       env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueRootKeysByRun)

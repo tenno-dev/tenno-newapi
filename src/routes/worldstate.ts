@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { AppEnv } from "../app/types";
-import { buildCurrentTranslatedRootKey, buildTranslatedRootKey } from "../cache/keys";
+import {
+  buildCurrentTranslatedRootKey,
+  buildTranslatedHashIndexKey,
+  buildTranslatedRootKey,
+} from "../cache/keys";
 import { SQL } from "../db/sql";
 import { ensureDiffTables, ensureQueueTables } from "../pipeline/retention";
 import {
@@ -303,7 +307,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
         .bind(runId)
         .all<QueueLogRow>(),
-      c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+      c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
         .bind(runId)
         .all<{ rootKey: string }>(),
     ]);
@@ -370,7 +374,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
           c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
             .bind(run.runId)
             .all<QueueLogRow>(),
-          c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectDiffRootKeysByRun)
+          c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
             .bind(run.runId)
             .all<{ rootKey: string }>(),
         ]);
@@ -431,6 +435,44 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     return c.json(responseBody, { headers });
   });
 
+  app.get("/worldstate/runs/:runId/changes", async (c) => {
+    const runId = c.req.param("runId").trim();
+
+    if (!runId) {
+      return c.json({ ok: false, error: "runId is required" }, 400);
+    }
+
+    const rootKey = c.req.query("rootKey")?.trim() || undefined;
+
+    await ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1);
+
+    type ItemChangeRow = {
+      id: number;
+      rootKey: string;
+      itemId: string;
+      changeType: string;
+      previousHash: string | null;
+      nextHash: string | null;
+      createdAt: string;
+    };
+
+    const result = rootKey
+      ? await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectItemChangesByRunAndRootKey)
+          .bind(runId, rootKey)
+          .all<ItemChangeRow>()
+      : await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectItemChangesByRun)
+          .bind(runId)
+          .all<ItemChangeRow>();
+
+    return c.json({
+      ok: true,
+      runId,
+      rootKey: rootKey ?? null,
+      count: result.results.length,
+      changes: result.results,
+    });
+  });
+
   app.get("/worldstate/translated/:rootKey", async (c) => {
     const rootKey = c.req.param("rootKey");
     const lang = (c.req.query("lang") ?? "en").trim().toLowerCase() || "en";
@@ -479,6 +521,25 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     }
 
     return c.json(responseBody, { headers });
+  });
+
+  app.get("/worldstate/translated/:rootKey/hashes/:hash", async (c) => {
+    const rootKey = c.req.param("rootKey");
+    const hash = c.req.param("hash");
+    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase() || "en";
+
+    const hashIndexKey = buildTranslatedHashIndexKey(rootKey, lang, hash);
+    const runKey = await c.env.TENNODEV_WORLDSTATE_KV.get(hashIndexKey);
+    if (!runKey) {
+      return c.json({ ok: false, error: "translated payload not found for hash", rootKey, lang, hash }, 404);
+    }
+
+    const payload = await c.env.TENNODEV_WORLDSTATE_KV.get(runKey, "json");
+    if (payload === null) {
+      return c.json({ ok: false, error: "translated payload not found", rootKey, lang, hash }, 404);
+    }
+
+    return c.json({ ok: true, rootKey, lang, hash, payload });
   });
 
   app.get("/worldstate/stats", async (c) => {

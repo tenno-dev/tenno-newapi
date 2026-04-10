@@ -71,3 +71,7 @@ export function buildCurrentTranslatedRootKey(rootKey: string, lang: string): st
 export function buildCurrentTranslatedRootCursorKey(rootKey: string, lang: string): string {
   return `${CACHE_NAMESPACE}:root:${rootKey}:translated:${lang}:current:cursor`;
 }
+
+export function buildTranslatedHashIndexKey(rootKey: string, lang: string, hash: string): string {
+  return `${CACHE_NAMESPACE}:translated-hash:${rootKey}:${lang}:${hash}`;
+}

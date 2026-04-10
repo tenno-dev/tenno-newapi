@@ -9,7 +9,7 @@ export type RootDiffItem = {
   changed: boolean;
 };
 
-export type RootItemChangeType = "added" | "removed" | "updated";
+export type RootItemChangeType = "new" | "removed" | "changed";
 
 export type RootItemChange = {
   rootKey: string;
@@ -122,7 +122,7 @@ export async function diffRootItems(
     const nextHash = nextMap.get(itemId) ?? null;
 
     if (previousHash === null && nextHash !== null) {
-      changes.push({ rootKey, itemId, changeType: "added", previousHash, nextHash });
+      changes.push({ rootKey, itemId, changeType: "new", previousHash, nextHash });
       continue;
     }
 
@@ -132,7 +132,7 @@ export async function diffRootItems(
     }
 
     if (previousHash !== nextHash) {
-      changes.push({ rootKey, itemId, changeType: "updated", previousHash, nextHash });
+      changes.push({ rootKey, itemId, changeType: "changed", previousHash, nextHash });
     }
   }
 

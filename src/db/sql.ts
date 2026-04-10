@@ -17,6 +17,14 @@ export const SQL = {
     "SELECT run_id as runId FROM pipeline_runs ORDER BY fetched_at DESC, run_id DESC LIMIT -1 OFFSET ?",
   selectDiffRootKeysByRun:
     "SELECT root_key as rootKey FROM pipeline_diffs WHERE run_id = ?",
+  selectChangedRootKeysByRun:
+    "SELECT DISTINCT root_key as rootKey FROM pipeline_item_changes WHERE run_id = ?",
+  selectItemChangesByRun:
+    "SELECT id, root_key as rootKey, item_id as itemId, change_type as changeType, previous_hash as previousHash, next_hash as nextHash, created_at as createdAt FROM pipeline_item_changes WHERE run_id = ? ORDER BY root_key ASC, item_id ASC",
+  selectItemChangesByRunAndRootKey:
+    "SELECT id, root_key as rootKey, item_id as itemId, change_type as changeType, previous_hash as previousHash, next_hash as nextHash, created_at as createdAt FROM pipeline_item_changes WHERE run_id = ? AND root_key = ? ORDER BY item_id ASC",
+  selectChangedItemIdsByRunAndRootKey:
+    "SELECT DISTINCT item_id as itemId FROM pipeline_item_changes WHERE run_id = ? AND root_key = ?",
   selectQueueRootKeysByRun:
     "SELECT root_key as rootKey FROM translate_queue_logs WHERE run_id = ?",
   deleteQueueLogsByRun: "DELETE FROM translate_queue_logs WHERE run_id = ?",
@@ -31,9 +39,9 @@ export const SQL = {
     "INSERT OR REPLACE INTO pipeline_runs (run_id, fetched_at, source_version, changed_count, dry_run, queued_count, execution_status, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   countPipelineRuns: "SELECT COUNT(*) as count FROM pipeline_runs",
   selectItemChangeStatsByDays:
-    "SELECT root_key as rootKey, COUNT(*) as changedItems, SUM(CASE WHEN change_type = 'added' THEN 1 ELSE 0 END) as added, SUM(CASE WHEN change_type = 'removed' THEN 1 ELSE 0 END) as removed, SUM(CASE WHEN change_type = 'updated' THEN 1 ELSE 0 END) as updated FROM pipeline_item_changes WHERE created_at >= datetime('now', ?) GROUP BY root_key ORDER BY changedItems DESC, rootKey ASC",
+    "SELECT root_key as rootKey, COUNT(*) as changedItems, SUM(CASE WHEN change_type IN ('new', 'added') THEN 1 ELSE 0 END) as new, SUM(CASE WHEN change_type = 'removed' THEN 1 ELSE 0 END) as removed, SUM(CASE WHEN change_type IN ('changed', 'updated') THEN 1 ELSE 0 END) as changed FROM pipeline_item_changes WHERE created_at >= datetime('now', ?) GROUP BY root_key ORDER BY changedItems DESC, rootKey ASC",
   selectItemChangeDailyStatsByDays:
-    "SELECT date(created_at) as day, root_key as rootKey, COUNT(*) as changedItems, SUM(CASE WHEN change_type = 'added' THEN 1 ELSE 0 END) as added, SUM(CASE WHEN change_type = 'removed' THEN 1 ELSE 0 END) as removed, SUM(CASE WHEN change_type = 'updated' THEN 1 ELSE 0 END) as updated FROM pipeline_item_changes WHERE created_at >= datetime('now', ?) GROUP BY date(created_at), root_key ORDER BY day ASC, rootKey ASC",
+    "SELECT date(created_at) as day, root_key as rootKey, COUNT(*) as changedItems, SUM(CASE WHEN change_type IN ('new', 'added') THEN 1 ELSE 0 END) as new, SUM(CASE WHEN change_type = 'removed' THEN 1 ELSE 0 END) as removed, SUM(CASE WHEN change_type IN ('changed', 'updated') THEN 1 ELSE 0 END) as changed FROM pipeline_item_changes WHERE created_at >= datetime('now', ?) GROUP BY date(created_at), root_key ORDER BY day ASC, rootKey ASC",
   insertTranslateQueueLog:
     "INSERT INTO translate_queue_logs (run_id, root_key, payload_key, target_languages, payload_size, status, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
   selectQueueLogs:
@@ -54,4 +62,30 @@ export const SQL = {
     "UPDATE pipeline_runs SET execution_status = ?, started_at = COALESCE(started_at, ?), completed_at = COALESCE(completed_at, ?) WHERE run_id = ?",
   selectSchemaObjects:
     "SELECT name, type, tbl_name as tableName, sql FROM sqlite_master WHERE type IN ('table', 'index') ORDER BY type, name LIMIT ?",
+  createPushSubscriptionsTable:
+    "CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, lang TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_seen_at TEXT, disabled_at TEXT)",
+  createPushSubscriptionRootKeysTable:
+    "CREATE TABLE IF NOT EXISTS push_subscription_rootkeys (subscription_id TEXT NOT NULL, root_key TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (subscription_id, root_key))",
+  createPushSubscriptionSubKeysTable:
+    "CREATE TABLE IF NOT EXISTS push_subscription_subkeys (subscription_id TEXT NOT NULL, root_key TEXT NOT NULL, sub_key TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (subscription_id, root_key, sub_key))",
+  upsertPushSubscription:
+    "INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, lang, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, lang = excluded.lang, updated_at = excluded.updated_at, disabled_at = NULL",
+  selectPushSubscriptionByEndpoint:
+    "SELECT id, endpoint, p256dh, auth, lang, created_at as createdAt, updated_at as updatedAt, last_seen_at as lastSeenAt, disabled_at as disabledAt FROM push_subscriptions WHERE endpoint = ? LIMIT 1",
+  deletePushSubscriptionRootKeysBySubscriptionId:
+    "DELETE FROM push_subscription_rootkeys WHERE subscription_id = ?",
+  insertPushSubscriptionRootKey:
+    "INSERT OR IGNORE INTO push_subscription_rootkeys (subscription_id, root_key, created_at) VALUES (?, ?, ?)",
+  deletePushSubscriptionSubKeysBySubscriptionId:
+    "DELETE FROM push_subscription_subkeys WHERE subscription_id = ?",
+  insertPushSubscriptionSubKey:
+    "INSERT OR IGNORE INTO push_subscription_subkeys (subscription_id, root_key, sub_key, created_at) VALUES (?, ?, ?, ?)",
+  deletePushSubscriptionByEndpoint:
+    "DELETE FROM push_subscriptions WHERE endpoint = ?",
+  deletePushSubscriptionRootKeysByEndpoint:
+    "DELETE FROM push_subscription_rootkeys WHERE subscription_id = (SELECT id FROM push_subscriptions WHERE endpoint = ?)",
+  deletePushSubscriptionSubKeysByEndpoint:
+    "DELETE FROM push_subscription_subkeys WHERE subscription_id = (SELECT id FROM push_subscriptions WHERE endpoint = ?)",
+  selectMatchingPushSubscriptionsWithSubKeys:
+    "SELECT s.id, s.endpoint, s.p256dh, s.auth, s.lang, COUNT(sk.sub_key) as subKeyCount, GROUP_CONCAT(sk.sub_key) as subKeysCsv FROM push_subscriptions s JOIN push_subscription_rootkeys k ON k.subscription_id = s.id LEFT JOIN push_subscription_subkeys sk ON sk.subscription_id = s.id AND sk.root_key = ? WHERE s.disabled_at IS NULL AND s.lang = ? AND (k.root_key = ? OR k.root_key = '*') GROUP BY s.id, s.endpoint, s.p256dh, s.auth, s.lang",
 } as const;
