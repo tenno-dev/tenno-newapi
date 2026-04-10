@@ -13,23 +13,28 @@ import { SQL } from "../db/sql";
 import { ensureDiffTables, ensureQueueTables, pruneOldRuns } from "./retention";
 
 async function updateRunExecutionState(db: D1Database, runId: string): Promise<void> {
-  await ensureDiffTables(db);
-  await ensureQueueTables(db);
+  await Promise.all([ensureDiffTables(db), ensureQueueTables(db)]);
 
-  const runResult = await db.prepare(SQL.selectPipelineRunById).bind(runId).all<{
-    runId: string;
-    queuedCount: number;
-  }>();
+  const [runResult, countsResult, boundsResult] = await Promise.all([
+    db.prepare(SQL.selectPipelineRunById).bind(runId).all<{
+      runId: string;
+      queuedCount: number;
+    }>(),
+    db.prepare(SQL.selectRunQueueLatestStatusCountsByRun).bind(runId, runId).all<{
+      processedCount: number;
+      failedCount: number;
+      knownCount: number;
+    }>(),
+    db.prepare(SQL.selectRunQueueTimeBoundsByRun).bind(runId).all<{
+      firstAt: string | null;
+      lastAt: string | null;
+    }>(),
+  ]);
 
   const run = runResult.results[0];
   if (!run) {
     return;
   }
-
-  const countsResult = await db
-    .prepare(SQL.selectRunQueueLatestStatusCountsByRun)
-    .bind(runId, runId)
-    .all<{ processedCount: number; failedCount: number; knownCount: number }>();
 
   const counts = countsResult.results[0] ?? {
     processedCount: 0,
@@ -40,11 +45,6 @@ async function updateRunExecutionState(db: D1Database, runId: string): Promise<v
   const knownCount = Number(counts.knownCount ?? 0);
   const failedCount = Number(counts.failedCount ?? 0);
   const queuedCount = Number(run.queuedCount ?? 0);
-
-  const boundsResult = await db
-    .prepare(SQL.selectRunQueueTimeBoundsByRun)
-    .bind(runId)
-    .all<{ firstAt: string | null; lastAt: string | null }>();
 
   const bounds = boundsResult.results[0] ?? { firstAt: null, lastAt: null };
 
@@ -108,10 +108,19 @@ export async function persistWorldStateRun(
     changedRootKeys: input.changed.map((item) => item.rootKey),
   });
 
-  for (const item of input.itemChanges) {
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange)
-      .bind(input.runId, item.rootKey, item.itemId, item.changeType, item.previousHash, item.nextHash)
-      .run();
+  if (input.itemChanges.length > 0) {
+    await env.TENNODEV_WORLDSTATE_D1.batch(
+      input.itemChanges.map((item) =>
+        env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange).bind(
+          input.runId,
+          item.rootKey,
+          item.itemId,
+          item.changeType,
+          item.previousHash,
+          item.nextHash
+        )
+      )
+    );
   }
 
   return { rawSnapshotKey, changedPayloadKeys };
@@ -193,10 +202,19 @@ export async function writeRootChange(
     input.payload
   );
 
-  for (const item of input.itemChanges) {
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange)
-      .bind(input.runId, item.rootKey, item.itemId, item.changeType, item.previousHash, item.nextHash)
-      .run();
+  if (input.itemChanges.length > 0) {
+    await env.TENNODEV_WORLDSTATE_D1.batch(
+      input.itemChanges.map((item) =>
+        env.TENNODEV_WORLDSTATE_D1.prepare(SQL.insertPipelineItemChange).bind(
+          input.runId,
+          item.rootKey,
+          item.itemId,
+          item.changeType,
+          item.previousHash,
+          item.nextHash
+        )
+      )
+    );
   }
 
   return kvKey;

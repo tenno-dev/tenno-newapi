@@ -124,3 +124,4 @@ A new endpoint lets the Service Worker fetch the payload after receiving a ping:
 5. The browser Service Worker receives the push, reads `{ rootKey, lang, hash }`, and fetches `GET /worldstate/translated/:rootKey/hashes/:hash?lang=:lang` to retrieve the translated payload.
 
 
+

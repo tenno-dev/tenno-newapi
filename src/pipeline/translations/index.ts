@@ -29,6 +29,7 @@ export { TRANSLATION_LANGS as TRANSLATION_LANGS_EXPORTED } from "./config";
 export {
   flattenToIndex,
   buildTranslationIndex,
+  buildTranslationIndexesCombined,
   buildTranslationObjectIndex,
 } from "./indexing";
 

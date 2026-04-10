@@ -134,76 +134,101 @@ export async function processTranslationMessage(
 
   const rootData: unknown = JSON.parse(rawPayload);
   const payloadSize = rawPayload.length;
-  let attemptedBootstrap = false;
 
-  // 2. For each target language, load the merged index from R2, translate, write to KV
-  for (const lang of message.targetLanguages) {
-    const indexKey = translationIndexR2Key(lang);
-    const objectIndexKey = translationObjectIndexR2Key(lang);
-    let indexObject = await env.TENNODEV_ASSETS_R2.get(indexKey);
-    let objectIndexObject = await env.TENNODEV_ASSETS_R2.get(objectIndexKey);
-
-    if ((!indexObject || !objectIndexObject) && !attemptedBootstrap) {
-      attemptedBootstrap = true;
-      await ensureTranslationSyncInitialized(env);
-      indexObject = await env.TENNODEV_ASSETS_R2.get(indexKey);
-      objectIndexObject = await env.TENNODEV_ASSETS_R2.get(objectIndexKey);
-    }
-
-    if (!indexObject || !objectIndexObject) {
-      // Indexes still unavailable for this language.
-      continue;
-    }
-
-    const index = await indexObject.json<Record<string, string>>();
-    const objectIndex = await objectIndexObject.json<TranslationObjectIndex>();
-    const translatedStrings = applyTranslations(rootData, index);
-    const translated = applyObjectMergeTranslations(translatedStrings, objectIndex);
-    const serialized = JSON.stringify(translated);
-
-    // Compute hash of translated payload for web push ping indexing
-    const hashBuffer = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(serialized)
-    );
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const translatedHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-
-    // Per-run snapshot (expires after 7 days)
-    const runKey = buildTranslatedRootKey(message.rootKey, lang, message.runId);
-    await env.TENNODEV_WORLDSTATE_KV.put(runKey, serialized, {
-      expirationTtl: TRANSLATED_ROOT_TTL_SECONDS,
-    });
-
-    // Store KV index: (rootKey, hash) => runKey (TTL aligned with run snapshot)
-    // lang is already encoded in the translated content so the hash is unique per diff
-    const hashIndexKey = buildTranslatedHashIndexKey(message.rootKey, translatedHash);
-    await env.TENNODEV_WORLDSTATE_KV.put(hashIndexKey, runKey, {
-      expirationTtl: TRANSLATED_ROOT_TTL_SECONDS,
-    });
-
-    // Current pointer (no TTL — always latest)
-    await saveCurrentTranslatedRootPayloadIfNewer(
-      env.TENNODEV_WORLDSTATE_KV,
-      message.rootKey,
+  // 2. Fetch all R2 indexes for all languages in parallel.
+  const langs = message.targetLanguages;
+  let r2Pairs = await Promise.all(
+    langs.map(async (lang) => ({
       lang,
-      serialized,
-      message.runId,
-      message.fetchedAt
-    );
+      indexObject: await env.TENNODEV_ASSETS_R2.get(translationIndexR2Key(lang)),
+      objectIndexObject: await env.TENNODEV_ASSETS_R2.get(translationObjectIndexR2Key(lang)),
+    }))
+  );
 
-    // Enqueue ping notification for subscribed clients
-    await env.TENNODEV_PUSH_QUEUE.send({
-      type: "worldstate.translate-ping",
-      rootKey: message.rootKey,
-      lang,
-      hash: translatedHash,
-      runId: message.runId,
-      fetchedAt: message.fetchedAt,
-    });
+  // Bootstrap translation indexes once if any language is missing both objects.
+  const anyMissing = r2Pairs.some((p) => !p.indexObject || !p.objectIndexObject);
+  if (anyMissing) {
+    await ensureTranslationSyncInitialized(env);
+
+    // Re-fetch only the languages that were missing, returning a fresh object per pair.
+    r2Pairs = await Promise.all(
+      r2Pairs.map(async (p) => {
+        if (p.indexObject && p.objectIndexObject) {
+          return p;
+        }
+        return {
+          lang: p.lang,
+          indexObject: await env.TENNODEV_ASSETS_R2.get(translationIndexR2Key(p.lang)),
+          objectIndexObject: await env.TENNODEV_ASSETS_R2.get(
+            translationObjectIndexR2Key(p.lang)
+          ),
+        };
+      })
+    );
   }
 
-  // 3. Log success to D1
+  // 3. Parse indexes once per language (memoized within this invocation) then translate all
+  //    languages in parallel.
+  await Promise.all(
+    r2Pairs.map(async ({ lang, indexObject, objectIndexObject }) => {
+      if (!indexObject || !objectIndexObject) {
+        // Indexes still unavailable for this language — skip.
+        return;
+      }
+
+      const [index, objectIndex] = await Promise.all([
+        indexObject.json<Record<string, string>>(),
+        objectIndexObject.json<TranslationObjectIndex>(),
+      ]);
+
+      const translatedStrings = applyTranslations(rootData, index);
+      const translated = applyObjectMergeTranslations(translatedStrings, objectIndex);
+      const serialized = JSON.stringify(translated);
+
+      // Compute hash of translated payload for web push ping indexing
+      const hashBuffer = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(serialized)
+      );
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const translatedHash = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+
+      // Per-run snapshot (expires after 7 days)
+      const runKey = buildTranslatedRootKey(message.rootKey, lang, message.runId);
+      await env.TENNODEV_WORLDSTATE_KV.put(runKey, serialized, {
+        expirationTtl: TRANSLATED_ROOT_TTL_SECONDS,
+      });
+
+      // Store KV index: (rootKey, hash) => runKey (TTL aligned with run snapshot)
+      // lang is already encoded in the translated content so the hash is unique per diff
+      const hashIndexKey = buildTranslatedHashIndexKey(message.rootKey, translatedHash);
+      await env.TENNODEV_WORLDSTATE_KV.put(hashIndexKey, runKey, {
+        expirationTtl: TRANSLATED_ROOT_TTL_SECONDS,
+      });
+
+      // Current pointer (no TTL — always latest)
+      await saveCurrentTranslatedRootPayloadIfNewer(
+        env.TENNODEV_WORLDSTATE_KV,
+        message.rootKey,
+        lang,
+        serialized,
+        message.runId,
+        message.fetchedAt
+      );
+
+      // Enqueue ping notification for subscribed clients
+      await env.TENNODEV_PUSH_QUEUE.send({
+        type: "worldstate.translate-ping",
+        rootKey: message.rootKey,
+        lang,
+        hash: translatedHash,
+        runId: message.runId,
+        fetchedAt: message.fetchedAt,
+      });
+    })
+  );
+
+  // 4. Log success to D1
   await logQueueProcessed(env.TENNODEV_WORLDSTATE_D1, {
     runId: message.runId,
     rootKey: message.rootKey,

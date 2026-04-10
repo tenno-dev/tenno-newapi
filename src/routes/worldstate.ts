@@ -10,6 +10,51 @@ import {
 } from "../pipeline/worldstate";
 import { TOP_LEVEL_WORLDSTATE_KEYS } from "../types/worldstate";
 
+/**
+ * Compute a weak ETag from JSON stringified content using simple hash.
+ * Returns format: W/"hash" as per HTTP spec.
+ */
+function computeETag(obj: unknown): string {
+  const json = JSON.stringify(obj);
+  let hash = 0;
+  for (let i = 0; i < json.length; i++) {
+    hash = ((hash << 5) - hash) + json.charCodeAt(i);
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return `W/"${Math.abs(hash).toString(16)}"`;
+}
+
+/**
+ * Add cache headers to response.
+ * If ETag matches If-None-Match, returns 304 Not Modified.
+ * Otherwise returns 200 with Cache-Control and ETag headers.
+ */
+type CacheHeadersResult = {
+  shouldReturn304: boolean;
+  headers: Record<string, string>;
+};
+
+function getCacheHeaders(
+  c: any, // Hono context
+  responseBody: unknown,
+  maxAgeSeconds: number = 60
+): CacheHeadersResult {
+  const etag = computeETag(responseBody);
+  const ifNoneMatch = c.req.header("if-none-match");
+  
+  // Return 304 if ETag matches client's cached version
+  const shouldReturn304 = ifNoneMatch === etag;
+
+  return {
+    shouldReturn304,
+    headers: {
+      "cache-control": `public, max-age=${maxAgeSeconds}`,
+      "etag": etag,
+      "vary": "If-None-Match",
+    },
+  };
+}
+
 /** Filter Events/HubEvents language-specific arrays and remove events with empty Messages. */
 function filterEventMessagesToLang(data: unknown, lang: string): unknown {
   const isLangMatch = (item: unknown): boolean => {
@@ -210,26 +255,33 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       }
     }
 
-    return c.json(
-      {
-        ok: true,
-        lang,
-        timestamp: new Date().toISOString(),
-        payloadCount: Object.keys(combined).length,
-        missingKeys: missing,
-        payload: combined,
-      },
-      {
-        headers: {
-          "cache-control": "public, max-age=60",
-          "content-type": "application/json; charset=utf-8",
-        },
-      }
-    );
+    const responseBody = {
+      ok: true,
+      lang,
+      timestamp: new Date().toISOString(),
+      payloadCount: Object.keys(combined).length,
+      missingKeys: missing,
+      payload: combined,
+    };
+
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/status", async (c) => {
-    return c.json(await getWorldStateStatus(c));
+    const responseBody = await getWorldStateStatus(c);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/runs/:runId/progress", async (c) => {
@@ -239,28 +291,29 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "runId is required" }, 400);
     }
 
-    await ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1);
-    await ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1);
+    await Promise.all([
+      ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1),
+      ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1),
+    ]);
 
-    const runResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectPipelineRunById)
-      .bind(runId)
-      .all<PipelineRunRow>();
+    const [runResult, queueResult, diffResult] = await Promise.all([
+      c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectPipelineRunById)
+        .bind(runId)
+        .all<PipelineRunRow>(),
+      c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
+        .bind(runId)
+        .all<QueueLogRow>(),
+      c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
+        .bind(runId)
+        .all<{ rootKey: string }>(),
+    ]);
 
     const run = runResult.results[0] ?? null;
-
-    const queueResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
-      .bind(runId)
-      .all<QueueLogRow>();
-
-    const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
-      .bind(runId)
-      .all<{ rootKey: string }>();
-
     const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
 
     const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
 
-    return c.json({
+    const responseBody = {
       ok: true,
       runId,
       run,
@@ -281,7 +334,17 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       },
       errorRootKeys: queue.errorRootKeys,
       updatedAt: new Date().toISOString(),
-    });
+    };
+
+    // Don't cache active runs as aggressively; cache inactive runs longer
+    const maxAge = queue.isActive ? 10 : 60;
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, maxAge);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/runs/:runId/changes", async (c) => {
@@ -323,8 +386,10 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
   });
 
   app.get("/worldstate/runs/current", async (c) => {
-    await ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1);
-    await ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1);
+    await Promise.all([
+      ensureDiffTables(c.env.TENNODEV_WORLDSTATE_D1),
+      ensureQueueTables(c.env.TENNODEV_WORLDSTATE_D1),
+    ]);
 
     const limitParam = Number.parseInt(c.req.query("limit") ?? "20", 10);
     const limit = Number.isNaN(limitParam) ? 20 : Math.max(1, Math.min(100, limitParam));
@@ -337,58 +402,41 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "no runs found" }, 404);
     }
 
-    const summaries: Array<{
-      run: PipelineRunRow;
-      queue: {
-        queued: number;
-        queuedKeys: string[];
-        queuedKeysCount: number;
-        processed: number;
-        failed: number;
-        pending: number;
-        status: string;
-        isActive: boolean;
-        startedAt: string | null;
-        endedAt: string | null;
-        activeDurationSec: number | null;
-        progress: number;
-        progressPercent: number;
-      };
-      errorRootKeys: Array<{ rootKey: string; error: string }>;
-    }> = [];
+    const summaries = await Promise.all(
+      recentResult.results.map(async (run) => {
+        const [queueResult, diffResult] = await Promise.all([
+          c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
+            .bind(run.runId)
+            .all<QueueLogRow>(),
+          c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
+            .bind(run.runId)
+            .all<{ rootKey: string }>(),
+        ]);
 
-    for (const run of recentResult.results) {
-      const queueResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueLogsByRun)
-        .bind(run.runId)
-        .all<QueueLogRow>();
+        const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
+        const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
 
-      const diffResult = await c.env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
-        .bind(run.runId)
-        .all<{ rootKey: string }>();
-
-      const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
-
-      const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
-      summaries.push({
-        run,
-        queue: {
-          queued: queue.queued,
-          queuedKeys: queue.queuedKeys,
-          queuedKeysCount: queue.queuedKeysCount,
-          processed: queue.processed,
-          failed: queue.failed,
-          pending: queue.pending,
-          status: queue.status,
-          isActive: queue.isActive,
-          startedAt: queue.startedAt,
-          endedAt: queue.endedAt,
-          activeDurationSec: queue.activeDurationSec,
-          progress: queue.progress,
-          progressPercent: queue.progressPercent,
-        },
-        errorRootKeys: queue.errorRootKeys,
-      });
-    }
+        return {
+          run,
+          queue: {
+            queued: queue.queued,
+            queuedKeys: queue.queuedKeys,
+            queuedKeysCount: queue.queuedKeysCount,
+            processed: queue.processed,
+            failed: queue.failed,
+            pending: queue.pending,
+            status: queue.status,
+            isActive: queue.isActive,
+            startedAt: queue.startedAt,
+            endedAt: queue.endedAt,
+            activeDurationSec: queue.activeDurationSec,
+            progress: queue.progress,
+            progressPercent: queue.progressPercent,
+          },
+          errorRootKeys: queue.errorRootKeys,
+        };
+      })
+    );
 
     const active = summaries.find((item) => item.queue.pending > 0) ?? null;
     const latestCompleted = summaries.find((item) => item.queue.pending === 0) ?? null;
@@ -400,7 +448,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "no runs found" }, 404);
     }
 
-    return c.json({
+    const responseBody = {
       ok: true,
       mode: active ? "active" : "latest",
       selected,
@@ -408,7 +456,17 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       latest,
       scannedRuns: summaries.length,
       updatedAt: new Date().toISOString(),
-    });
+    };
+
+    // Don't cache if there's an active run; more aggressive cache for completed state
+    const maxAge = active ? 10 : 60;
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, maxAge);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/translated/:rootKey", async (c) => {
@@ -424,7 +482,14 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     // Filter event messages to requested language
     const filtered = filterEventMessagesToLang(payload, lang);
 
-    return c.json({ ok: true, rootKey, lang, key, payload: filtered });
+    const responseBody = { ok: true, rootKey, lang, key, payload: filtered };
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/translated/:rootKey/runs/:runId", async (c) => {
@@ -444,7 +509,14 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     // Filter event messages to requested language
     const filtered = filterEventMessagesToLang(payload, lang);
 
-    return c.json({ ok: true, rootKey, runId, lang, key, payload: filtered });
+    const responseBody = { ok: true, rootKey, runId, lang, key, payload: filtered };
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/translated/:rootKey/hashes/:hash", async (c) => {
@@ -470,14 +542,26 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
 
   app.get("/worldstate/stats", async (c) => {
     const days = Number.parseInt(c.req.query("days") ?? "30", 10);
-    return c.json(await getWorldStateStats(c, Number.isNaN(days) ? 30 : days));
+    const responseBody = await getWorldStateStats(c, Number.isNaN(days) ? 30 : days);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300); // 5 min cache for stats
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/stats/daily", async (c) => {
     const days = Number.parseInt(c.req.query("days") ?? "30", 10);
     const rootKey = c.req.query("rootKey") ?? undefined;
-    return c.json(
-      await getWorldStateDailyStats(c, Number.isNaN(days) ? 30 : days, rootKey)
-    );
+    const responseBody = await getWorldStateDailyStats(c, Number.isNaN(days) ? 30 : days, rootKey);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300); // 5 min cache for stats
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 }

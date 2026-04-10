@@ -41,8 +41,10 @@ export async function ensurePushTables(db: D1Database): Promise<void> {
 }
 
 export async function pruneOldRuns(env: Bindings): Promise<void> {
-  await ensureDiffTables(env.TENNODEV_WORLDSTATE_D1);
-  await ensureQueueTables(env.TENNODEV_WORLDSTATE_D1);
+  await Promise.all([
+    ensureDiffTables(env.TENNODEV_WORLDSTATE_D1),
+    ensureQueueTables(env.TENNODEV_WORLDSTATE_D1),
+  ]);
 
   const oldRuns = await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectOldRunsBeyondRetention)
     .bind(MAX_RETAINED_RUNS)
@@ -50,35 +52,33 @@ export async function pruneOldRuns(env: Bindings): Promise<void> {
 
   for (const row of oldRuns.results) {
     const runId = row.runId;
-    const diffRows = await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
-      .bind(runId)
-      .all<{ rootKey: string }>();
-    const queueRows = await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueRootKeysByRun)
-      .bind(runId)
-      .all<{ rootKey: string }>();
+    const [diffRows, queueRows] = await Promise.all([
+      env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectChangedRootKeysByRun)
+        .bind(runId)
+        .all<{ rootKey: string }>(),
+      env.TENNODEV_WORLDSTATE_D1.prepare(SQL.selectQueueRootKeysByRun)
+        .bind(runId)
+        .all<{ rootKey: string }>(),
+    ]);
 
     const diffRootKeys = new Set(diffRows.results.map((item) => item.rootKey));
     const queueRootKeys = new Set(queueRows.results.map((item) => item.rootKey));
 
-    await env.TENNODEV_WORLDSTATE_KV.delete(buildRawSnapshotKey(runId));
-    await env.TENNODEV_WORLDSTATE_KV.delete(buildRunSummaryKey(runId));
+    await Promise.all([
+      env.TENNODEV_WORLDSTATE_KV.delete(buildRawSnapshotKey(runId)),
+      env.TENNODEV_WORLDSTATE_KV.delete(buildRunSummaryKey(runId)),
+      ...[...diffRootKeys].map((rootKey) =>
+        env.TENNODEV_WORLDSTATE_KV.delete(buildRootPayloadKey(rootKey, runId))
+      ),
+      ...[...queueRootKeys].map((rootKey) =>
+        env.TENNODEV_WORLDSTATE_KV.delete(buildDummyTranslationKey(runId, rootKey))
+      ),
+    ]);
 
-    for (const rootKey of diffRootKeys) {
-      await env.TENNODEV_WORLDSTATE_KV.delete(buildRootPayloadKey(rootKey, runId));
-    }
-
-    for (const rootKey of queueRootKeys) {
-      await env.TENNODEV_WORLDSTATE_KV.delete(buildDummyTranslationKey(runId, rootKey));
-    }
-
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deleteQueueLogsByRun)
-      .bind(runId)
-      .run();
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deletePipelineItemChangesByRun)
-      .bind(runId)
-      .run();
-    await env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deletePipelineRunByRun)
-      .bind(runId)
-      .run();
+    await env.TENNODEV_WORLDSTATE_D1.batch([
+      env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deleteQueueLogsByRun).bind(runId),
+      env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deletePipelineItemChangesByRun).bind(runId),
+      env.TENNODEV_WORLDSTATE_D1.prepare(SQL.deletePipelineRunByRun).bind(runId),
+    ]);
   }
 }
