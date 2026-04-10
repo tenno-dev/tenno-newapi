@@ -18,6 +18,9 @@
       "custom_domain": true,
     },
   ],
+  "placement": {
+    "mode": "smart",
+  },
   "vars": {
     "WORLDSTATE_SOURCE_URL": "https://api2.mediathek.community/worldstate",
   },
