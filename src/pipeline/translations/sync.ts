@@ -17,7 +17,18 @@ import {
   translationObjectIndexR2Key,
   fileUrl,
 } from "./config";
-import { buildTranslationIndex, buildTranslationObjectIndex } from "./indexing";
+import { buildTranslationIndexesCombined } from "./indexing";
+
+/**
+ * Compute SHA-256 hash of a string for change detection.
+ */
+async function computeContentHash(content: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(content);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 export type TranslationSyncResult = {
   ok: boolean;
@@ -89,24 +100,26 @@ async function mapWithConcurrency<T, R>(
   concurrency: number,
   worker: (item: T, index: number) => Promise<R>
 ): Promise<R[]> {
-  const limit = Math.max(1, Math.min(concurrency, items.length || 1));
+  if (items.length === 0) return [];
+
+  const limit = Math.max(1, Math.min(concurrency, items.length));
   const results = new Array<R>(items.length);
   let nextIndex = 0;
 
-  async function runWorker(): Promise<void> {
-    while (true) {
-      const current = nextIndex;
-      nextIndex++;
-
-      if (current >= items.length) {
-        return;
-      }
-
+  const runWorker = async (): Promise<void> => {
+    let current: number;
+    while ((current = nextIndex++) < items.length) {
       results[current] = await worker(items[current], current);
     }
+  };
+
+  // Create exactly `limit` concurrent workers
+  const workers: Promise<void>[] = [];
+  for (let i = 0; i < limit; i++) {
+    workers.push(runWorker());
   }
 
-  await Promise.all(Array.from({ length: limit }, () => runWorker()));
+  await Promise.all(workers);
   return results;
 }
 
@@ -146,11 +159,6 @@ export async function ensureTranslationSyncInitialized(env: Bindings): Promise<{
 
 export async function executeTranslationSync(env: Bindings): Promise<TranslationSyncResult> {
   const startedAt = new Date().toISOString();
-  const previous = await loadTranslationSyncState(env.TENNODEV_WORLDSTATE_KV);
-  await saveTranslationSyncState(env.TENNODEV_WORLDSTATE_KV, {
-    ...previous,
-    lastStartedAt: startedAt,
-  });
 
   const syncedAt = new Date().toISOString();
   type LangSyncStats = {
@@ -190,34 +198,54 @@ export async function executeTranslationSync(env: Bindings): Promise<Translation
             return;
           }
 
-          const data = (await res.json()) as TranslationFileData;
+          const contentText = await res.text();
+          const data = JSON.parse(contentText) as TranslationFileData;
           accumulated[file] = data;
 
-          await env.TENNODEV_ASSETS_R2.put(key, JSON.stringify(data), {
-            httpMetadata: { contentType: "application/json" },
-          });
-          uploaded++;
+          // Compute hash of downloaded content for change detection
+          const newHash = await computeContentHash(contentText);
+
+          // Check if file already exists and has same content
+          const existing = await env.TENNODEV_ASSETS_R2.get(key);
+          let shouldUpload = true;
+
+          if (existing) {
+            const existingText = await existing.text();
+            const existingHash = await computeContentHash(existingText);
+            if (newHash === existingHash) {
+              shouldUpload = false;
+              skipped++;
+            }
+          }
+
+          // Only upload if content changed
+          if (shouldUpload) {
+            await env.TENNODEV_ASSETS_R2.put(key, contentText, {
+              httpMetadata: { contentType: "application/json" },
+            });
+            uploaded++;
+          }
         } catch {
           errors.push({ lang, file, status: 0 });
         }
       });
 
-      // Build and upload merged flat/object index for this language.
+      // Build and upload merged flat/object index for this language using combined efficient pass.
       if (Object.keys(accumulated).length > 0) {
-        const index = buildTranslationIndex(accumulated);
-        await env.TENNODEV_ASSETS_R2.put(translationIndexR2Key(lang), JSON.stringify(index), {
+        const { flatIndex, objectIndex } = buildTranslationIndexesCombined(accumulated);
+
+        // Upload both indexes
+        const flatIndexText = JSON.stringify(flatIndex);
+        const objectIndexText = JSON.stringify(objectIndex);
+
+        await env.TENNODEV_ASSETS_R2.put(translationIndexR2Key(lang), flatIndexText, {
           httpMetadata: { contentType: "application/json" },
         });
         indexesBuilt++;
 
-        const objectIndex = buildTranslationObjectIndex(accumulated);
-        await env.TENNODEV_ASSETS_R2.put(
-          translationObjectIndexR2Key(lang),
-          JSON.stringify(objectIndex),
-          {
-            httpMetadata: { contentType: "application/json" },
-          }
-        );
+        await env.TENNODEV_ASSETS_R2.put(translationObjectIndexR2Key(lang), objectIndexText, {
+          httpMetadata: { contentType: "application/json" },
+        });
         objectIndexesBuilt++;
       }
 
@@ -241,6 +269,7 @@ export async function executeTranslationSync(env: Bindings): Promise<Translation
     errors,
   };
 
+  // Single KV save at the end (optimization: removed initial save)
   await saveTranslationSyncState(env.TENNODEV_WORLDSTATE_KV, {
     initialized: result.ok && result.indexesBuilt > 0,
     lastStartedAt: startedAt,

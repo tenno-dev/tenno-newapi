@@ -10,6 +10,51 @@ import {
 } from "../pipeline/worldstate";
 import { TOP_LEVEL_WORLDSTATE_KEYS } from "../types/worldstate";
 
+/**
+ * Compute a weak ETag from JSON stringified content using simple hash.
+ * Returns format: W/"hash" as per HTTP spec.
+ */
+function computeETag(obj: unknown): string {
+  const json = JSON.stringify(obj);
+  let hash = 0;
+  for (let i = 0; i < json.length; i++) {
+    hash = ((hash << 5) - hash) + json.charCodeAt(i);
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return `W/"${Math.abs(hash).toString(16)}"`;
+}
+
+/**
+ * Add cache headers to response.
+ * If ETag matches If-None-Match, returns 304 Not Modified.
+ * Otherwise returns 200 with Cache-Control and ETag headers.
+ */
+type CacheHeadersResult = {
+  shouldReturn304: boolean;
+  headers: Record<string, string>;
+};
+
+function getCacheHeaders(
+  c: any, // Hono context
+  responseBody: unknown,
+  maxAgeSeconds: number = 60
+): CacheHeadersResult {
+  const etag = computeETag(responseBody);
+  const ifNoneMatch = c.req.header("if-none-match");
+  
+  // Return 304 if ETag matches client's cached version
+  const shouldReturn304 = ifNoneMatch === etag;
+
+  return {
+    shouldReturn304,
+    headers: {
+      "cache-control": `public, max-age=${maxAgeSeconds}`,
+      "etag": etag,
+      "vary": "If-None-Match",
+    },
+  };
+}
+
 /** Filter Events/HubEvents language-specific arrays and remove events with empty Messages. */
 function filterEventMessagesToLang(data: unknown, lang: string): unknown {
   const isLangMatch = (item: unknown): boolean => {
@@ -210,26 +255,33 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       }
     }
 
-    return c.json(
-      {
-        ok: true,
-        lang,
-        timestamp: new Date().toISOString(),
-        payloadCount: Object.keys(combined).length,
-        missingKeys: missing,
-        payload: combined,
-      },
-      {
-        headers: {
-          "cache-control": "public, max-age=60",
-          "content-type": "application/json; charset=utf-8",
-        },
-      }
-    );
+    const responseBody = {
+      ok: true,
+      lang,
+      timestamp: new Date().toISOString(),
+      payloadCount: Object.keys(combined).length,
+      missingKeys: missing,
+      payload: combined,
+    };
+
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/status", async (c) => {
-    return c.json(await getWorldStateStatus(c));
+    const responseBody = await getWorldStateStatus(c);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/runs/:runId/progress", async (c) => {
@@ -261,7 +313,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
 
     const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
 
-    return c.json({
+    const responseBody = {
       ok: true,
       runId,
       run,
@@ -282,7 +334,17 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       },
       errorRootKeys: queue.errorRootKeys,
       updatedAt: new Date().toISOString(),
-    });
+    };
+
+    // Don't cache active runs as aggressively; cache inactive runs longer
+    const maxAge = queue.isActive ? 10 : 60;
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, maxAge);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/runs/current", async (c) => {
@@ -348,7 +410,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "no runs found" }, 404);
     }
 
-    return c.json({
+    const responseBody = {
       ok: true,
       mode: active ? "active" : "latest",
       selected,
@@ -356,7 +418,17 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       latest,
       scannedRuns: summaries.length,
       updatedAt: new Date().toISOString(),
-    });
+    };
+
+    // Don't cache if there's an active run; more aggressive cache for completed state
+    const maxAge = active ? 10 : 60;
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, maxAge);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/translated/:rootKey", async (c) => {
@@ -372,7 +444,14 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     // Filter event messages to requested language
     const filtered = filterEventMessagesToLang(payload, lang);
 
-    return c.json({ ok: true, rootKey, lang, key, payload: filtered });
+    const responseBody = { ok: true, rootKey, lang, key, payload: filtered };
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/translated/:rootKey/runs/:runId", async (c) => {
@@ -392,19 +471,38 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     // Filter event messages to requested language
     const filtered = filterEventMessagesToLang(payload, lang);
 
-    return c.json({ ok: true, rootKey, runId, lang, key, payload: filtered });
+    const responseBody = { ok: true, rootKey, runId, lang, key, payload: filtered };
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/stats", async (c) => {
     const days = Number.parseInt(c.req.query("days") ?? "30", 10);
-    return c.json(await getWorldStateStats(c, Number.isNaN(days) ? 30 : days));
+    const responseBody = await getWorldStateStats(c, Number.isNaN(days) ? 30 : days);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300); // 5 min cache for stats
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/stats/daily", async (c) => {
     const days = Number.parseInt(c.req.query("days") ?? "30", 10);
     const rootKey = c.req.query("rootKey") ?? undefined;
-    return c.json(
-      await getWorldStateDailyStats(c, Number.isNaN(days) ? 30 : days, rootKey)
-    );
+    const responseBody = await getWorldStateDailyStats(c, Number.isNaN(days) ? 30 : days, rootKey);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300); // 5 min cache for stats
+
+    if (shouldReturn304) {
+      return c.body(null, 304, headers);
+    }
+
+    return c.json(responseBody, { headers });
   });
 }
