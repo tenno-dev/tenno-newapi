@@ -14,6 +14,7 @@ export type Bindings = {
   PUSH_ALLOWED_ORIGINS?: string;
   PUSH_SUBSCRIBE_RATE_LIMIT?: string;
   PUSH_SUBSCRIBE_WINDOW_SECONDS?: string;
+  CORS_ALLOWED_ORIGINS?: string;
 };
 
 export type AppEnv = {

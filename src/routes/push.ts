@@ -81,9 +81,18 @@ function isAllowedOrigin(c: Context<AppEnv>): boolean {
 
 export const pushRoutes = new Hono<AppEnv>();
 
+pushRoutes.get("/push/public-key", async (c) => {
+  const publicKey = c.env.VAPID_PUBLIC_KEY?.trim();
+  if (!publicKey) {
+    return c.json({ ok: false, error: "VAPID public key is not configured" }, 503);
+  }
+
+  return c.json({ ok: true, publicKey });
+});
+
 function normalizeSubKeyFilters(
   raw: SubscribeBody["subKeyFilters"],
-  allowedRoots: Set<string>
+  canonicalRootMap: Map<string, string>
 ): Record<string, string[]> {
   if (!raw || typeof raw !== "object") {
     return {};
@@ -92,8 +101,9 @@ function normalizeSubKeyFilters(
   const normalized: Record<string, string[]> = {};
 
   for (const [rootKeyRaw, values] of Object.entries(raw)) {
-    const rootKey = rootKeyRaw.trim();
-    if (!allowedRoots.has(rootKey)) {
+    const rootKeyNormalized = rootKeyRaw.trim().toLowerCase();
+    const rootKey = canonicalRootMap.get(rootKeyNormalized);
+    if (!rootKey) {
       continue;
     }
 
@@ -143,22 +153,36 @@ pushRoutes.post("/push/subscribe", async (c) => {
   const lang = langRaw as (typeof TRANSLATION_LANGS)[number];
 
   const requestedRootKeys = Array.isArray(body.rootKeys) ? body.rootKeys : [];
-  const dedupedRootKeys = Array.from(new Set(requestedRootKeys.map((key) => key.trim()).filter(Boolean)));
+  const dedupedRootKeys = Array.from(
+    new Set(
+      requestedRootKeys
+        .map((key) => key.trim())
+        .filter(Boolean)
+    )
+  );
 
   if (dedupedRootKeys.length === 0) {
     return c.json({ ok: false, error: "rootKeys must include at least one key" }, 400);
   }
 
-  const validRootSet = new Set<string>(TOP_LEVEL_WORLDSTATE_KEYS);
+  const canonicalRootMap = new Map<string, string>(
+    TOP_LEVEL_WORLDSTATE_KEYS.map((key) => [key.toLowerCase(), key])
+  );
   const normalizedRootKeys = dedupedRootKeys.includes("*")
     ? ["*"]
-    : dedupedRootKeys.filter((key) => validRootSet.has(key));
+    : Array.from(
+        new Set(
+          dedupedRootKeys
+            .map((key) => canonicalRootMap.get(key.toLowerCase()))
+            .filter((key): key is string => Boolean(key))
+        )
+      );
 
   if (normalizedRootKeys.length === 0) {
     return c.json({ ok: false, error: "no valid rootKeys provided" }, 400);
   }
 
-  const subKeyFilters = normalizeSubKeyFilters(body.subKeyFilters, validRootSet);
+  const subKeyFilters = normalizeSubKeyFilters(body.subKeyFilters, canonicalRootMap);
   if (normalizedRootKeys.includes("*") && Object.keys(subKeyFilters).length > 0) {
     return c.json({ ok: false, error: "subKeyFilters cannot be used with wildcard root key" }, 400);
   }

@@ -3,6 +3,11 @@ import { swaggerUI } from "@hono/swagger-ui";
 import { ACTIVE_ROUTES } from "../app/routes";
 import { AppEnv } from "../app/types";
 import { executeTranslationSync } from "../pipeline/translations";
+import { executeWorldStatePush } from "../pipeline/worldstate";
+import { parseBoolean } from "../app/http";
+import { processTranslationMessage } from "../queue/translator";
+import { buildCurrentRootPayloadKey } from "../cache/keys";
+import { TRANSLATION_LANGS } from "../pipeline/translations/config";
 
 const WARFRAME_WORLDSTATE_URL = "https://api.warframe.com/cdn/worldState.php";
 
@@ -202,5 +207,88 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
 
     const result = await executeTranslationSync(c.env);
     return c.json({ ok: true, trigger: "post-deploy", result });
+  });
+
+  app.post("/internal/worldstate/push", async (c) => {
+    const configuredToken = c.env.DEPLOY_TRIGGER_TOKEN?.trim();
+    const authHeader = c.req.header("authorization") ?? "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+
+    if (!configuredToken) {
+      return c.json({ ok: false, error: "deploy trigger token is not configured" }, 503);
+    }
+
+    if (!bearerToken || bearerToken !== configuredToken) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+
+    const force = parseBoolean(c.req.query("force"));
+    const dryRun = parseBoolean(c.req.query("dryRun"));
+    const result = await executeWorldStatePush(c.env, { dryRun, force });
+
+    return c.json({ ok: true, trigger: "internal", dryRun, force, result });
+  });
+
+  app.post("/internal/translations/rebuild-root", async (c) => {
+    const configuredToken = c.env.DEPLOY_TRIGGER_TOKEN?.trim();
+    const authHeader = c.req.header("authorization") ?? "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+
+    if (!configuredToken) {
+      return c.json({ ok: false, error: "deploy trigger token is not configured" }, 503);
+    }
+
+    if (!bearerToken || bearerToken !== configuredToken) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+
+    const rootKey = (c.req.query("rootKey") ?? "").trim();
+    if (!rootKey) {
+      return c.json({ ok: false, error: "rootKey is required" }, 400);
+    }
+
+    const langsRaw = c.req.query("langs")?.trim();
+    const requestedLangs = langsRaw
+      ? langsRaw
+          .split(",")
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean)
+      : [...TRANSLATION_LANGS];
+
+    const supportedSet = new Set<string>(TRANSLATION_LANGS);
+    const targetLanguages = Array.from(new Set(requestedLangs)).filter((lang) => supportedSet.has(lang));
+    if (targetLanguages.length === 0) {
+      return c.json({ ok: false, error: "no valid languages requested", supported: TRANSLATION_LANGS }, 400);
+    }
+
+    const payloadKey = buildCurrentRootPayloadKey(rootKey);
+    const hasPayload = await c.env.TENNODEV_WORLDSTATE_KV.get(payloadKey);
+    if (!hasPayload) {
+      return c.json({ ok: false, error: `current root payload not found for rootKey '${rootKey}'` }, 404);
+    }
+
+    const runId = `${Date.now()}-manual-rebuild-${rootKey}`;
+    const fetchedAt = new Date().toISOString();
+
+    await processTranslationMessage(c.env, {
+      type: "worldstate.translate-root",
+      runId,
+      fetchedAt,
+      sourceVersion: null,
+      sourceLocale: "en",
+      targetLanguages,
+      rootKey,
+      payloadKey,
+    });
+
+    return c.json({
+      ok: true,
+      trigger: "internal",
+      rootKey,
+      runId,
+      fetchedAt,
+      targetLanguages,
+      payloadKey,
+    });
   });
 }

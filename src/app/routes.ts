@@ -4,6 +4,8 @@ export const ACTIVE_ROUTES = [
   "GET /docs",
   "GET /openapi.json",
   "POST /internal/translations/sync",
+  "POST /internal/translations/rebuild-root",
+  "POST /internal/worldstate/push",
   "GET /debug-public/warframe/fetch",
   "GET /worldstate/full",
   "GET /worldstate/status",
@@ -13,6 +15,7 @@ export const ACTIVE_ROUTES = [
   "GET /worldstate/runs/:runId/changes",
   "GET /worldstate/stats",
   "GET /worldstate/stats/daily",
+  "GET /push/public-key",
   "POST /push/subscribe",
   "POST /push/unsubscribe",
   // debug — dev only

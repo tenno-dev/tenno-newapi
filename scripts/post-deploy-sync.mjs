@@ -29,13 +29,16 @@ const dotenv = readDotEnv(path.join(repoRoot, ".env"));
 const wranglerConfigRaw = fs.readFileSync(path.join(repoRoot, "wrangler.jsonc"), "utf8");
 const workerNameMatch = wranglerConfigRaw.match(/"name"\s*:\s*"([^"]+)"/);
 const workerName = workerNameMatch?.[1];
+const customDomainMatch = wranglerConfigRaw.match(
+  /"pattern"\s*:\s*"([^"]+)"\s*,\s*"custom_domain"\s*:\s*true/
+);
+const customDomain = customDomainMatch?.[1]?.trim();
 
 if (!workerName) {
   console.error("Could not determine worker name from wrangler.jsonc");
   process.exit(1);
 }
 
-const workerBaseUrl = process.env.WORKER_DEPLOY_URL || dotenv.WORKER_DEPLOY_URL || `https://${workerName}.mybitti.workers.dev`;
 const token = process.env.DEPLOY_TRIGGER_TOKEN || dotenv.DEPLOY_TRIGGER_TOKEN;
 
 if (!token) {
@@ -43,21 +46,45 @@ if (!token) {
   process.exit(1);
 }
 
-const url = `${workerBaseUrl}/internal/translations/sync`;
-const response = await fetch(url, {
-  method: "POST",
-  headers: {
-    authorization: `Bearer ${token}`,
-  },
-});
+const configuredBaseUrl = process.env.WORKER_DEPLOY_URL || dotenv.WORKER_DEPLOY_URL || "";
+const workersDevBaseUrl = `https://${workerName}.mybitti.workers.dev`;
+const customDomainBaseUrl = customDomain
+  ? customDomain.startsWith("http")
+    ? customDomain
+    : `https://${customDomain}`
+  : "";
 
-const text = await response.text();
+const baseUrlCandidates = [configuredBaseUrl, customDomainBaseUrl, workersDevBaseUrl].filter(Boolean);
 
-if (!response.ok) {
+let lastError = null;
+
+for (const baseUrl of baseUrlCandidates) {
+  const url = `${baseUrl.replace(/\/$/, "")}/internal/translations/sync`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+    },
+  });
+
+  const text = await response.text();
+
+  if (response.ok) {
+    console.log(`Post-deploy translation sync triggered successfully at ${url}`);
+    console.log(text);
+    process.exit(0);
+  }
+
+  // If this URL is stale (common when workers.dev is disabled), try the next candidate.
+  if (response.status === 404) {
+    lastError = `Post-deploy translation sync returned 404 at ${url}`;
+    continue;
+  }
+
   console.error(`Post-deploy translation sync failed: ${response.status} ${response.statusText}`);
   console.error(text);
   process.exit(1);
 }
 
-console.log(`Post-deploy translation sync triggered successfully at ${url}`);
-console.log(text);
+console.error(lastError ?? "Post-deploy translation sync failed: no valid target URL available");
+process.exit(1);

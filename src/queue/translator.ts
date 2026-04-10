@@ -56,6 +56,32 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function normalizeEmbeddedTranslations(data: unknown, lang: string): unknown {
+  if (Array.isArray(data)) {
+    return data.map((item) => normalizeEmbeddedTranslations(item, lang));
+  }
+
+  if (!isPlainRecord(data)) {
+    return data;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (key === "translations") {
+      if (isPlainRecord(value)) {
+        const selected = value[lang];
+        if (typeof selected === "string") {
+          result[key] = selected;
+        }
+      }
+      continue;
+    }
+    result[key] = normalizeEmbeddedTranslations(value, lang);
+  }
+
+  return result;
+}
+
 type MatchCandidate = "topKey" | "name" | "regex" | "imageKey";
 
 function candidateValue(
@@ -182,7 +208,8 @@ export async function processTranslationMessage(
       ]);
 
       const translatedStrings = applyTranslations(rootData, index);
-      const translated = applyObjectMergeTranslations(translatedStrings, objectIndex);
+      const translatedWithObjects = applyObjectMergeTranslations(translatedStrings, objectIndex);
+      const translated = normalizeEmbeddedTranslations(translatedWithObjects, lang);
       const serialized = JSON.stringify(translated);
 
       const hashBuffer = await crypto.subtle.digest(
