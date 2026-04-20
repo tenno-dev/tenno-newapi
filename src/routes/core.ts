@@ -118,18 +118,7 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
     });
   });
 
-  const docsHandler = swaggerUI({ url: "/openapi.json" });
-  app.get("/docs", (c) => {
-    const response = docsHandler(c);
-    if (response instanceof Promise) {
-      return response.then((res) => {
-        res.headers.set("cache-control", "public, max-age=86400");
-        return res;
-      });
-    }
-    response.headers.set("cache-control", "public, max-age=86400");
-    return response;
-  });
+  app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 
   app.get("/", (c) => {
     const publicRoutes = ACTIVE_ROUTES.filter(
