@@ -111,7 +111,10 @@ function buildOpenApiSpec(origin: string) {
 
 export function registerCoreRoutes(app: Hono<AppEnv>): void {
   app.get("/openapi.json", (c) => {
-    const spec = buildOpenApiSpec(new URL(c.req.url).origin);
+    const protocol = c.req.header("x-forwarded-proto") || new URL(c.req.url).protocol.replace(":", "");
+    const host = c.req.header("host") || new URL(c.req.url).host;
+    const origin = `${protocol}://${host}`;
+    const spec = buildOpenApiSpec(origin);
     return c.json(spec, {
       headers: {
         "cache-control": "public, max-age=86400",
