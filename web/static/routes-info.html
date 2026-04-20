@@ -1,38 +1,98 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>API-Routen Übersicht</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 2em; background: #f8f9fa; }
-    h1 { color: #2c3e50; }
-    table { border-collapse: collapse; width: 100%; background: #fff; }
-    th, td { border: 1px solid #ddd; padding: 8px; }
-    th { background: #e9ecef; }
-    tr:nth-child(even) { background: #f2f2f2; }
-    code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; }
-  </style>
+	<meta charset="UTF-8">
+	<title>API Routes Overview</title>
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<style>
+		:root {
+			--bg: #f8f9fa;
+			--fg: #23272a;
+			--table-bg: #fff;
+			--table-border: #ddd;
+			--table-th: #e9ecef;
+			--table-row-alt: #f2f2f2;
+			--code-bg: #f4f4f4;
+			--link: #007bff;
+		}
+		[data-theme="dark"] {
+			--bg: #181a1b;
+			--fg: #f1f3f4;
+			--table-bg: #23272a;
+			--table-border: #333;
+			--table-th: #23272a;
+			--table-row-alt: #202225;
+			--code-bg: #23272a;
+			--link: #4ea1ff;
+		}
+		html, body { background: var(--bg); color: var(--fg); font-family: system-ui, sans-serif; margin: 2em; transition: background .2s, color .2s; }
+		h1 { color: var(--fg); font-size: 2em; margin-bottom: 0.5em; }
+		table { border-collapse: collapse; width: 100%; background: var(--table-bg); margin-top: 2em; }
+		th, td { border: 1px solid var(--table-border); padding: 10px 12px; }
+		th { background: var(--table-th); text-align: left; }
+		tr:nth-child(even) { background: var(--table-row-alt); }
+		code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; }
+		a { color: var(--link); text-decoration: none; }
+		a:hover { text-decoration: underline; }
+		.toggle {
+			position: fixed;
+			top: 1.5em;
+			right: 2em;
+			background: var(--table-bg);
+			color: var(--fg);
+			border: 1px solid var(--table-border);
+			border-radius: 2em;
+			padding: 0.3em 1.2em;
+			font-size: 1em;
+			cursor: pointer;
+			box-shadow: 0 2px 8px #0002;
+			transition: background .2s, color .2s, border .2s;
+			z-index: 10;
+		}
+		@media (max-width: 600px) {
+			body { margin: 0.5em; }
+			.toggle { right: 1em; top: 1em; }
+			table, th, td { font-size: 0.97em; }
+		}
+	</style>
+	<script>
+		function setTheme(theme) {
+			document.documentElement.setAttribute('data-theme', theme);
+			localStorage.setItem('theme', theme);
+		}
+		function toggleTheme() {
+			const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+			setTheme(current);
+			document.getElementById('theme-toggle').textContent = current === 'dark' ? '🌙 Dark' : '☀️ Light';
+		}
+		window.onload = () => {
+			const saved = localStorage.getItem('theme');
+			const theme = saved === 'dark' || !saved ? 'dark' : 'light';
+			setTheme(theme);
+			document.getElementById('theme-toggle').textContent = theme === 'dark' ? '🌙 Dark' : '☀️ Light';
+		};
+	</script>
 </head>
 <body>
-  <h1>API-Routen Übersicht</h1>
-  <table>
-    <tr><th>Methode</th><th>Pfad</th><th>Beschreibung</th></tr>
-    <tr><td>GET</td><td><code>/</code></td><td>Info-Seite (diese Seite)</td></tr>
-    <tr><td>GET</td><td><code>/health</code></td><td>Systemstatus</td></tr>
-    <tr><td>GET</td><td><code>/openapi.json</code></td><td>OpenAPI-Spezifikation</td></tr>
-    <tr><td>GET</td><td><code>/docs</code></td><td>Swagger UI</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/full</code></td><td>Kompletter Worldstate Dump</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/status</code></td><td>Status des Worldstate-Prozesses</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/runs/:runId/progress</code></td><td>Fortschritt eines Worldstate-Runs</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/runs/current</code></td><td>Aktueller Worldstate-Run</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/runs/:runId/changes</code></td><td>Änderungen eines Runs</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/translated/:rootKey</code></td><td>Übersetzte Daten für rootKey</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/translated/:rootKey/runs/:runId</code></td><td>Übersetzte Daten für rootKey & Run</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/translated/:rootKey/hashes/:hash</code></td><td>Übersetzte Daten für rootKey & Hash</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/stats</code></td><td>Worldstate Statistiken</td></tr>
-    <tr><td>GET</td><td><code>/worldstate/stats/daily</code></td><td>Tägliche Worldstate Statistiken</td></tr>
-    <!-- Nur öffentliche, für Webseiten relevante Endpunkte -->
-  </table>
-  <p style="margin-top:2em;color:#888;font-size:0.9em">Stand: April 2026</p>
+	<button class="toggle" id="theme-toggle" onclick="toggleTheme()">🌙 Dark</button>
+	<h1>API Routes Overview</h1>
+	<table>
+		<tr><th>Path</th><th>Description</th></tr>
+		<tr><td><code>/</code></td><td>Info page (this page)</td></tr>
+		<tr><td><code>/health</code></td><td>System health status</td></tr>
+		<tr><td><code>/openapi.json</code></td><td>OpenAPI specification</td></tr>
+		<tr><td><code>/docs</code></td><td>Swagger UI</td></tr>
+		<tr><td><code>/worldstate/full</code></td><td>Complete worldstate dump</td></tr>
+		<tr><td><code>/worldstate/status</code></td><td>Worldstate process status</td></tr>
+		<tr><td><code>/worldstate/runs/:runId/progress</code></td><td>Progress of a worldstate run</td></tr>
+		<tr><td><code>/worldstate/runs/current</code></td><td>Current worldstate run</td></tr>
+		<tr><td><code>/worldstate/runs/:runId/changes</code></td><td>Changes of a run</td></tr>
+		<tr><td><code>/worldstate/translated/:rootKey</code></td><td>Translated data for rootKey</td></tr>
+		<tr><td><code>/worldstate/translated/:rootKey/runs/:runId</code></td><td>Translated data for rootKey & run</td></tr>
+		<tr><td><code>/worldstate/translated/:rootKey/hashes/:hash</code></td><td>Translated data for rootKey & hash</td></tr>
+		<tr><td><code>/worldstate/stats</code></td><td>Worldstate statistics</td></tr>
+		<tr><td><code>/worldstate/stats/daily</code></td><td>Daily worldstate statistics</td></tr>
+	</table>
+	<p style="margin-top:2em;color:#888;font-size:0.9em">April 2026</p>
 </body>
 </html>
