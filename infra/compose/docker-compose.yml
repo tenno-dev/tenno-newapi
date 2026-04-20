@@ -15,6 +15,7 @@ services:
       redis:
         condition: service_healthy
     networks:
+      - public
       - data
 
   worker-translate:
@@ -65,6 +66,8 @@ volumes:
   blob_data:
 
 networks:
+  public:
+    driver: bridge
   data:
     driver: bridge
     internal: true
