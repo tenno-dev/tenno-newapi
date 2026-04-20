@@ -16,6 +16,7 @@ COPY package.json tsconfig.json ./
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     pnpm install --no-frozen-lockfile
 COPY src/ ./src/
+COPY web/static/ ./web/static/
 RUN pnpm tsc
 
 # ---- runner ----
@@ -25,5 +26,6 @@ ENV NODE_ENV=production
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/web/static ./web/static
 
 CMD ["node", "dist/index.js"]
