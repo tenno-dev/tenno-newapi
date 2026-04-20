@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>API-Routen Übersicht</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2em; background: #f8f9fa; }
+    h1 { color: #2c3e50; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #e9ecef; }
+    tr:nth-child(even) { background: #f2f2f2; }
+    code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>API-Routen Übersicht</h1>
+  <table>
+    <tr><th>Methode</th><th>Pfad</th><th>Beschreibung</th></tr>
+    <tr><td>GET</td><td><code>/</code></td><td>Info-Seite (diese Seite)</td></tr>
+    <tr><td>GET</td><td><code>/health</code></td><td>Systemstatus</td></tr>
+    <tr><td>GET</td><td><code>/openapi.json</code></td><td>OpenAPI-Spezifikation</td></tr>
+    <tr><td>GET</td><td><code>/docs</code></td><td>Swagger UI</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/full</code></td><td>Kompletter Worldstate Dump</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/status</code></td><td>Status des Worldstate-Prozesses</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/runs/:runId/progress</code></td><td>Fortschritt eines Worldstate-Runs</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/runs/current</code></td><td>Aktueller Worldstate-Run</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/runs/:runId/changes</code></td><td>Änderungen eines Runs</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/translated/:rootKey</code></td><td>Übersetzte Daten für rootKey</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/translated/:rootKey/runs/:runId</code></td><td>Übersetzte Daten für rootKey & Run</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/translated/:rootKey/hashes/:hash</code></td><td>Übersetzte Daten für rootKey & Hash</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/stats</code></td><td>Worldstate Statistiken</td></tr>
+    <tr><td>GET</td><td><code>/worldstate/stats/daily</code></td><td>Tägliche Worldstate Statistiken</td></tr>
+    <!-- Nur öffentliche, für Webseiten relevante Endpunkte -->
+  </table>
+  <p style="margin-top:2em;color:#888;font-size:0.9em">Stand: April 2026</p>
+</body>
+</html>

@@ -136,26 +136,15 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
 
   app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 
-  app.get("/", (c) => {
-    const publicRoutes = ACTIVE_ROUTES.filter(
-      (entry) =>
-        !entry.includes(" /debug") &&
-        !entry.includes(" /debug-public") &&
-        !entry.includes(" /internal/")
-    );
-
-    return c.json(
-      {
-        ok: true,
-        message: "Active routes",
-        routes: publicRoutes,
-      },
-      {
-        headers: {
-          "cache-control": "public, max-age=3600",
-        },
+  app.get("/", async (c) => {
+    // Serve the static HTML info page for routes
+    const file = await Bun.file("web/static/routes-info.html").text();
+    return c.html(file, {
+      headers: {
+        "cache-control": "public, max-age=3600",
+        "content-type": "text/html; charset=utf-8"
       }
-    );
+    });
   });
 
   app.get("/health", (c) => {
