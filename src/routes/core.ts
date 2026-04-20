@@ -12,6 +12,18 @@ import { TRANSLATION_LANGS } from "../pipeline/translations/config";
 
 const WARFRAME_WORLDSTATE_URL = "https://api.warframe.com/cdn/worldState.php";
 
+function formatUptime(seconds: number): string {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${pad(hours)}:${pad(minutes)}:${pad(secs)}`;
+
+  return days > 0 ? `${days} ${time}` : time;
+}
+
 function toOpenApiPath(path: string): string {
   return path.replace(/:([A-Za-z0-9_]+)/g, "{$1}");
 }
@@ -155,7 +167,10 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
     return c.json(
       {
         status: "healthy",
-        uptime: Math.round(uptime),
+        uptime: {
+          seconds: Math.round(uptime),
+          formatted: formatUptime(Math.round(uptime)),
+        },
         memory: {
           heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
           heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
