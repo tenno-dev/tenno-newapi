@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { swaggerUI } from "@hono/swagger-ui";
 import * as os from "os";
 import { ACTIVE_ROUTES } from "../app/routes";
+import { promises as fs } from "fs";
 import { AppEnv } from "../app/types";
 import { executeTranslationSync } from "../pipeline/translations";
 import { executeWorldStatePush } from "../pipeline/worldstate";
@@ -137,8 +138,8 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
   app.get("/docs", swaggerUI({ url: "/openapi.json" }));
 
   app.get("/", async (c) => {
-    // Serve the static HTML info page for routes
-    const file = await Bun.file("web/static/routes-info.html").text();
+    // Serve the static HTML info page for routes (Node.js & Bun compatible)
+    const file = await fs.readFile("web/static/routes-info.html", "utf8");
     return c.html(file, {
       headers: {
         "cache-control": "public, max-age=3600",
