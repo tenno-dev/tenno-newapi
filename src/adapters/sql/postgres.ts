@@ -32,6 +32,38 @@ async function runWithClient(client: PoolClient, stmt: ResolvedStatement): Promi
   await client.query(stmt._sql, stmt._params);
 }
 
+export class PostgresSQLClient implements SQLClient {
+  private readonly pool: Pool;
+
+  constructor(connectionString: string) {
+    this.pool = new Pool({ connectionString });
+  }
+
+  prepare(rawSql: string): PreparedStatement {
+    const sql = convertPlaceholders(rawSql);
+    return {
+      bind: (...args: unknown[]): BoundStatement => makeStatement(this.pool, sql, args),
+    };
+  }
+
+  async batch(stmts: BoundStatement[]): Promise<void> {
+    const resolved = stmts as ResolvedStatement[];
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const stmt of resolved) {
+        await runWithClient(client, stmt);
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+
 export function createPostgresClient(pool: Pool): SQLClient {
   return {
     prepare(rawSql: string): PreparedStatement {

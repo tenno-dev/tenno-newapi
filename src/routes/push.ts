@@ -103,9 +103,9 @@ pushRoutes.get("/push/subscriptions", async (c) => {
   type SubKeyRow = { subscriptionId: string; rootKey: string; subKey: string };
 
   const [subsResult, rootKeysResult, subKeysResult] = await Promise.all([
-    c.env.sql.prepare(SQL.selectAllPushSubscriptions).all<SubscriptionRow>(),
-    c.env.sql.prepare(SQL.selectAllPushSubscriptionRootKeys).all<RootKeyRow>(),
-    c.env.sql.prepare(SQL.selectAllPushSubscriptionSubKeys).all<SubKeyRow>(),
+    c.env.sql.prepare(SQL.selectAllPushSubscriptions).bind().all<SubscriptionRow>(),
+    c.env.sql.prepare(SQL.selectAllPushSubscriptionRootKeys).bind().all<RootKeyRow>(),
+    c.env.sql.prepare(SQL.selectAllPushSubscriptionSubKeys).bind().all<SubKeyRow>(),
   ]);
 
   const rootKeysById = new Map<string, string[]>();
@@ -124,7 +124,7 @@ pushRoutes.get("/push/subscriptions", async (c) => {
     subKeysById.set(row.subscriptionId, byRoot);
   }
 
-  const subscriptions = subsResult.results.map((row) => ({
+  const subscriptions = subsResult.results.map((row: SubscriptionRow) => ({
     id: row.id, endpoint: row.endpoint, lang: row.lang,
     createdAt: row.createdAt, updatedAt: row.updatedAt,
     lastSeenAt: row.lastSeenAt, disabledAt: row.disabledAt,
@@ -142,9 +142,9 @@ pushRoutes.post("/push/subscriptions/clear", async (c) => {
 
   await ensurePushTables(c.env.sql);
   await c.env.sql.batch([
-    c.env.sql.prepare(SQL.deleteAllPushSubscriptionSubKeys),
-    c.env.sql.prepare(SQL.deleteAllPushSubscriptionRootKeys),
-    c.env.sql.prepare(SQL.deleteAllPushSubscriptions),
+    c.env.sql.prepare(SQL.deleteAllPushSubscriptionSubKeys).bind(),
+    c.env.sql.prepare(SQL.deleteAllPushSubscriptionRootKeys).bind(),
+    c.env.sql.prepare(SQL.deleteAllPushSubscriptions).bind(),
   ]);
 
   return c.json({ ok: true, cleared: true });

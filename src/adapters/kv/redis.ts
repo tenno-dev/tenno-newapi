@@ -1,7 +1,7 @@
 import Redis from "ioredis";
 import type { KVStore, KVListResult } from "../../app/types";
 
-class RedisKVStore implements KVStore {
+export class RedisKVStore implements KVStore {
   constructor(private readonly redis: Redis) {}
 
   get(key: string): Promise<string | null>;
