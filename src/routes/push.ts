@@ -89,7 +89,7 @@ pushRoutes.get("/push/public-key", async (c) => {
     { ok: true, publicKey },
     {
       headers: {
-        "cache-control": "public, max-age=2592000, immutable",
+        "cache-control": "public, max-age=2592000, s-maxage=2592000, immutable",
       },
     }
   );
@@ -139,7 +139,14 @@ pushRoutes.get("/push/subscriptions", async (c) => {
     subKeyFilters: subKeysById.get(row.id) ?? {},
   }));
 
-  return c.json({ ok: true, count: subscriptions.length, subscriptions });
+  return c.json(
+    { ok: true, count: subscriptions.length, subscriptions },
+    {
+      headers: {
+        "cache-control": "no-store",
+      },
+    }
+  );
 });
 
 pushRoutes.post("/push/subscriptions/clear", async (c) => {
@@ -154,7 +161,14 @@ pushRoutes.post("/push/subscriptions/clear", async (c) => {
     c.env.sql.prepare(SQL.deleteAllPushSubscriptions).bind(),
   ]);
 
-  return c.json({ ok: true, cleared: true });
+  return c.json(
+    { ok: true, cleared: true },
+    {
+      headers: {
+        "cache-control": "no-store",
+      },
+    }
+  );
 });
 
 function normalizeSubKeyFilters(
@@ -266,7 +280,14 @@ pushRoutes.post("/push/subscribe", async (c) => {
     await c.env.sql.batch(statements);
   }
 
-  return c.json({ ok: true, id, lang, rootKeys: normalizedRootKeys, subKeyFilters });
+  return c.json(
+    { ok: true, id, lang, rootKeys: normalizedRootKeys, subKeyFilters },
+    {
+      headers: {
+        "cache-control": "no-store",
+      },
+    }
+  );
 });
 
 pushRoutes.post("/push/unsubscribe", async (c) => {
@@ -291,5 +312,12 @@ pushRoutes.post("/push/unsubscribe", async (c) => {
     c.env.sql.prepare(SQL.deletePushSubscriptionByEndpoint).bind(endpoint),
   ]);
 
-  return c.json({ ok: true });
+  return c.json(
+    { ok: true },
+    {
+      headers: {
+        "cache-control": "no-store",
+      },
+    }
+  );
 });

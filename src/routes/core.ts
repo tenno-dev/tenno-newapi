@@ -130,7 +130,7 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
     const spec = buildOpenApiSpec(origin);
     return c.json(spec, {
       headers: {
-        "cache-control": "public, max-age=86400",
+        "cache-control": "public, max-age=3600, s-maxage=86400",
       },
     });
   });
@@ -170,7 +170,7 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
       },
       {
         headers: {
-          "cache-control": "no-cache",
+          "cache-control": "no-store, must-revalidate",
         },
       }
     );

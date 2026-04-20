@@ -32,18 +32,29 @@ type CacheHeadersResult = {
 function getCacheHeaders(
   c: { req: { header: (name: string) => string | undefined } },
   responseBody: unknown,
-  maxAgeSeconds = 60
+  maxAgeSeconds = 60,
+  edgeMaxAgeSeconds = maxAgeSeconds,
+  staleWhileRevalidateSeconds = 0
 ): CacheHeadersResult {
   const etag = computeETag(responseBody);
   const ifNoneMatch = c.req.header("if-none-match");
   const shouldReturn304 = ifNoneMatch === etag;
 
+  const cacheControlParts = [
+    "public",
+    `max-age=${maxAgeSeconds}`,
+    `s-maxage=${edgeMaxAgeSeconds}`,
+  ];
+  if (staleWhileRevalidateSeconds > 0) {
+    cacheControlParts.push(`stale-while-revalidate=${staleWhileRevalidateSeconds}`);
+  }
+
   return {
     shouldReturn304,
     headers: {
-      "cache-control": `public, max-age=${maxAgeSeconds}`,
+      "cache-control": cacheControlParts.join(", "),
       "etag": etag,
-      "vary": "If-None-Match",
+      "vary": "Accept-Encoding",
     },
   };
 }
@@ -215,14 +226,14 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       payload: combined,
     };
 
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 15, 60, 30);
     if (shouldReturn304) return c.body(null, 304, headers);
     return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/status", async (c) => {
     const responseBody = await getWorldStateStatus(c);
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 10, 30, 20);
     if (shouldReturn304) return c.body(null, 304, headers);
     return c.json(responseBody, { headers });
   });
@@ -259,8 +270,9 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       updatedAt: new Date().toISOString(),
     };
 
-    const maxAge = queue.isActive ? 10 : 60;
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, maxAge);
+    const { shouldReturn304, headers } = queue.isActive
+      ? getCacheHeaders(c, responseBody, 5, 10, 10)
+      : getCacheHeaders(c, responseBody, 30, 120, 30);
     if (shouldReturn304) return c.body(null, 304, headers);
     return c.json(responseBody, { headers });
   });
@@ -323,8 +335,9 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       updatedAt: new Date().toISOString(),
     };
 
-    const maxAge = active ? 10 : 60;
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, maxAge);
+    const { shouldReturn304, headers } = active
+      ? getCacheHeaders(c, responseBody, 5, 10, 10)
+      : getCacheHeaders(c, responseBody, 15, 60, 20);
     if (shouldReturn304) return c.body(null, 304, headers);
     return c.json(responseBody, { headers });
   });
@@ -351,18 +364,17 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       ? await c.env.sql.prepare(SQL.selectItemChangesByRunAndRootKey).bind(runId, rootKey).all<ItemChangeRow>()
       : await c.env.sql.prepare(SQL.selectItemChangesByRun).bind(runId).all<ItemChangeRow>();
 
-    return c.json(
-      {
-        ok: true, runId, rootKey: rootKey ?? null,
-        count: result.results.length,
-        changes: result.results,
-      },
-      {
-        headers: {
-          "cache-control": "public, max-age=60",
-        },
-      }
-    );
+    const responseBody = {
+      ok: true,
+      runId,
+      rootKey: rootKey ?? null,
+      count: result.results.length,
+      changes: result.results,
+    };
+
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60, 300, 120);
+    if (shouldReturn304) return c.body(null, 304, headers);
+    return c.json(responseBody, { headers });
   });
 
   app.get("/worldstate/translated/:rootKey", async (c) => {
@@ -377,7 +389,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
 
     const filtered = filterEventMessagesToLang(payload, lang);
     const responseBody = { ok: true, rootKey, lang, key, payload: filtered };
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 20, 60, 30);
     if (shouldReturn304) return c.body(null, 304, headers);
     return c.json(responseBody, { headers });
   });
@@ -395,7 +407,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
 
     const filtered = filterEventMessagesToLang(payload, lang);
     const responseBody = { ok: true, rootKey, runId, lang, key, payload: filtered };
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300, 3600, 300);
     if (shouldReturn304) return c.body(null, 304, headers);
     return c.json(responseBody, { headers });
   });
@@ -420,7 +432,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       { ok: true, rootKey, lang, hash, payload },
       {
         headers: {
-          "cache-control": "public, max-age=31536000, immutable",
+          "cache-control": "public, max-age=31536000, s-maxage=31536000, immutable",
         },
       }
     );
@@ -429,7 +441,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
   app.get("/worldstate/stats", async (c) => {
     const days = Number.parseInt(c.req.query("days") ?? "30", 10);
     const responseBody = await getWorldStateStats(c, Number.isNaN(days) ? 30 : days);
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300, 900, 300);
     if (shouldReturn304) return c.body(null, 304, headers);
     return c.json(responseBody, { headers });
   });
@@ -438,7 +450,7 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
     const days = Number.parseInt(c.req.query("days") ?? "30", 10);
     const rootKey = c.req.query("rootKey") ?? undefined;
     const responseBody = await getWorldStateDailyStats(c, Number.isNaN(days) ? 30 : days, rootKey);
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300);
+    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300, 900, 300);
     if (shouldReturn304) return c.body(null, 304, headers);
     return c.json(responseBody, { headers });
   });
