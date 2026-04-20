@@ -111,10 +111,25 @@ function buildOpenApiSpec(origin: string) {
 export function registerCoreRoutes(app: Hono<AppEnv>): void {
   app.get("/openapi.json", (c) => {
     const spec = buildOpenApiSpec(new URL(c.req.url).origin);
-    return c.json(spec);
+    return c.json(spec, {
+      headers: {
+        "cache-control": "public, max-age=86400",
+      },
+    });
   });
 
-  app.get("/docs", swaggerUI({ url: "/openapi.json" }));
+  const docsHandler = swaggerUI({ url: "/openapi.json" });
+  app.get("/docs", (c) => {
+    const response = docsHandler(c);
+    if (response instanceof Promise) {
+      return response.then((res) => {
+        res.headers.set("cache-control", "public, max-age=86400");
+        return res;
+      });
+    }
+    response.headers.set("cache-control", "public, max-age=86400");
+    return response;
+  });
 
   app.get("/", (c) => {
     const publicRoutes = ACTIVE_ROUTES.filter(
@@ -124,15 +139,29 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
         !entry.includes(" /internal/")
     );
 
-    return c.json({
-      ok: true,
-      message: "Active routes",
-      routes: publicRoutes,
-    });
+    return c.json(
+      {
+        ok: true,
+        message: "Active routes",
+        routes: publicRoutes,
+      },
+      {
+        headers: {
+          "cache-control": "public, max-age=3600",
+        },
+      }
+    );
   });
 
   app.get("/health", (c) => {
-    return c.json({ status: "healthy" });
+    return c.json(
+      { status: "healthy" },
+      {
+        headers: {
+          "cache-control": "no-cache",
+        },
+      }
+    );
   });
 
   app.get("/debug-public/warframe/fetch", async (c) => {

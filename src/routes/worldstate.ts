@@ -351,11 +351,18 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       ? await c.env.sql.prepare(SQL.selectItemChangesByRunAndRootKey).bind(runId, rootKey).all<ItemChangeRow>()
       : await c.env.sql.prepare(SQL.selectItemChangesByRun).bind(runId).all<ItemChangeRow>();
 
-    return c.json({
-      ok: true, runId, rootKey: rootKey ?? null,
-      count: result.results.length,
-      changes: result.results,
-    });
+    return c.json(
+      {
+        ok: true, runId, rootKey: rootKey ?? null,
+        count: result.results.length,
+        changes: result.results,
+      },
+      {
+        headers: {
+          "cache-control": "public, max-age=60",
+        },
+      }
+    );
   });
 
   app.get("/worldstate/translated/:rootKey", async (c) => {
@@ -409,7 +416,14 @@ export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "translated payload not found", rootKey, lang, hash }, 404);
     }
 
-    return c.json({ ok: true, rootKey, lang, hash, payload });
+    return c.json(
+      { ok: true, rootKey, lang, hash, payload },
+      {
+        headers: {
+          "cache-control": "public, max-age=31536000, immutable",
+        },
+      }
+    );
   });
 
   app.get("/worldstate/stats", async (c) => {

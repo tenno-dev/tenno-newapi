@@ -85,7 +85,14 @@ pushRoutes.get("/push/public-key", async (c) => {
   if (!publicKey) {
     return c.json({ ok: false, error: "VAPID public key is not configured" }, 503);
   }
-  return c.json({ ok: true, publicKey });
+  return c.json(
+    { ok: true, publicKey },
+    {
+      headers: {
+        "cache-control": "public, max-age=2592000, immutable",
+      },
+    }
+  );
 });
 
 pushRoutes.get("/push/subscriptions", async (c) => {
