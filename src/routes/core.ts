@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { swaggerUI } from "@hono/swagger-ui";
+import * as os from "os";
 import { ACTIVE_ROUTES } from "../app/routes";
 import { AppEnv } from "../app/types";
 import { executeTranslationSync } from "../pipeline/translations";
@@ -143,8 +144,31 @@ export function registerCoreRoutes(app: Hono<AppEnv>): void {
   });
 
   app.get("/health", (c) => {
+    const mem = process.memoryUsage();
+    const load = os.loadavg();
+    const cpuCount = os.cpus().length;
+    const uptime = process.uptime();
+
     return c.json(
-      { status: "healthy" },
+      {
+        status: "healthy",
+        uptime: Math.round(uptime),
+        memory: {
+          heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+          heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+          rss: Math.round(mem.rss / 1024 / 1024),
+          external: Math.round(mem.external / 1024 / 1024),
+        },
+        cpu: {
+          cores: cpuCount,
+          loadAverage: {
+            "1m": load[0].toFixed(2),
+            "5m": load[1].toFixed(2),
+            "15m": load[2].toFixed(2),
+          },
+        },
+        timestamp: new Date().toISOString(),
+      },
       {
         headers: {
           "cache-control": "no-cache",
