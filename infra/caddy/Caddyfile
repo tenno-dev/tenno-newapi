@@ -1,0 +1,3 @@
+api.tenno.dev {
+    reverse_proxy localhost:3000
+}

@@ -1,0 +1,70 @@
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file: ../../.env
+    volumes:
+      - blob_data:/app/blob
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - data
+
+  worker-translate:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/worker.js"]
+    env_file: ../../.env
+    volumes:
+      - blob_data:/app/blob
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - data
+
+  postgres:
+    image: postgres:16.13-alpine
+    restart: unless-stopped
+    env_file: ../../.env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+    networks:
+      - data
+
+  redis:
+    image: redis:8.4.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data
+
+volumes:
+  postgres_data:
+  redis_data:
+  blob_data:
+
+networks:
+  data:
+    driver: bridge
+    internal: true

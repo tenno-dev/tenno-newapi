@@ -1,0 +1,27 @@
+{
+  "name": "tennodev-api",
+  "version": "1.0.0",
+  "description": "Tenno New API – self-hosted Node.js port",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:worker": "node dist/worker.js",
+    "dev": "tsx watch src/index.ts",
+    "dev:worker": "tsx watch src/worker.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@hono/swagger-ui": "^0.5.0",
+    "hono": "^4.7.5",
+    "ioredis": "^5.6.1",
+    "node-cron": "^3.0.3",
+    "pg": "^8.14.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.11.11",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}
