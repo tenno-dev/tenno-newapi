@@ -5,23 +5,53 @@ import { getItemChangeDailyStats, getItemChangeStats, getPipelineRunCount } from
 import { buildWorldStateStatusModel } from "../read-models";
 import { loadCurrentRootHashes } from "./analysis";
 
+function buildSourceStatus(configuredSource: string | undefined, configuredToken: string | undefined) {
+  const trimmedSource = configuredSource?.trim();
+  const trimmedToken = configuredToken?.trim();
+
+  if (!trimmedSource) {
+    return {
+      mode: "official" as const,
+      url: "https://api.warframe.com/cdn/worldState.php",
+      tokenConfigured: false,
+    };
+  }
+
+  try {
+    const url = new URL(trimmedSource);
+    const tokenInUrl = url.searchParams.get("url")?.trim();
+    const tokenConfigured = !!trimmedToken || !!tokenInUrl;
+
+    if (tokenConfigured) {
+      url.searchParams.set("url", "[redacted]");
+    }
+
+    return {
+      mode: "proxy" as const,
+      url: url.toString(),
+      tokenConfigured,
+    };
+  } catch {
+    return {
+      mode: "proxy" as const,
+      url: trimmedToken ? `${trimmedSource}[redacted]` : trimmedSource,
+      tokenConfigured: !!trimmedToken,
+    };
+  }
+}
+
 export async function getWorldStateStatus(c: AppContext) {
   const [latestRun, rootHashes, totalRuns] = await Promise.all([
     loadLatestRunMeta(c.env.kv),
     loadCurrentRootHashes(c.env.kv),
     getPipelineRunCount(c.env.sql),
   ]);
-  const configuredSource = c.env.WORLDSTATE_SOURCE_URL?.trim();
 
   return buildWorldStateStatusModel({
     latestRun,
     rootHashCount: Object.keys(rootHashes).length,
     d1RunCount: totalRuns,
-    source: {
-      mode: configuredSource ? "proxy" : "official",
-      url: configuredSource || "https://api.warframe.com/cdn/worldState.php",
-      tokenConfigured: !!c.env.WORLDSTATE_SOURCE_TOKEN?.trim(),
-    },
+    source: buildSourceStatus(c.env.WORLDSTATE_SOURCE_URL, c.env.WORLDSTATE_SOURCE_TOKEN),
   });
 }
 
