@@ -5,16 +5,16 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 # ---- deps ----
 FROM base AS deps
 WORKDIR /app
-COPY package.json pnpm-lock.yaml ./
+COPY package.json ./
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod
+    pnpm install --no-frozen-lockfile --prod
 
 # ---- build ----
 FROM base AS build
 WORKDIR /app
-COPY package.json pnpm-lock.yaml tsconfig.json ./
+COPY package.json tsconfig.json ./
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
+    pnpm install --no-frozen-lockfile
 COPY src/ ./src/
 RUN pnpm tsc
 
