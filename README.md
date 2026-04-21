@@ -1,11 +1,11 @@
 # tenno-newapi
 
-Self-hosted Node.js rewrite of the previous Cloudflare-based API.
+Self-hosted Bun rewrite of the previous Cloudflare-based API.
 
 ## Runtime
 
-- Node.js 22
-- Hono
+- Bun 1.2+
+- ElysiaJS
 - PostgreSQL
 - Redis
 - Redis Streams worker

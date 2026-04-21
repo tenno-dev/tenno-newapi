@@ -1,22 +1,10 @@
-import pg from "pg";
-import Redis from "ioredis";
-import { Bindings } from "./app/types";
-import { RedisKVStore } from "./adapters/kv/redis";
+import { RedisClient, SQL } from "bun";
+import type { Bindings, QueueMessage } from "./app/types";
+import { BunRedisKVStore } from "./adapters/kv/redis";
 import { LocalBlobStore } from "./adapters/blob/local";
-import { PostgresSQLClient } from "./adapters/sql/postgres";
-import { RedisStreamsQueueClient } from "./adapters/queue/redis-streams";
+import { BunSQLClient } from "./adapters/sql/postgres";
+import { BunRedisQueueClient } from "./adapters/queue/redis-streams";
 import { handleQueueMessage } from "./queue/consumer";
-import { QueueMessage } from "./app/types";
-
-// Parse pg TIMESTAMPTZ and TIMESTAMP columns as ISO strings
-pg.types.setTypeParser(
-  pg.types.builtins.TIMESTAMPTZ,
-  (val: string) => new Date(val.replace(" ", "T") + (val.includes("+") || val.endsWith("Z") ? "" : "Z")).toISOString()
-);
-pg.types.setTypeParser(
-  pg.types.builtins.TIMESTAMP,
-  (val: string) => new Date(val.replace(" ", "T") + "Z").toISOString()
-);
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -28,20 +16,21 @@ const STREAM_KEY = "worldstate:translate";
 const GROUP_NAME = "workers";
 const CONSUMER_NAME = `consumer-${process.pid}`;
 
-async function buildEnv(): Promise<{ env: Bindings; redis: Redis }> {
+async function buildEnv(): Promise<{ env: Bindings; redis: RedisClient }> {
   const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
   const databaseUrl = requireEnv("DATABASE_URL");
   const blobBasePath = process.env.BLOB_BASE_PATH ?? "/app/blob";
 
-  const redis = new Redis(redisUrl, { lazyConnect: false, maxRetriesPerRequest: 3 });
+  const redisClient = new RedisClient(redisUrl);
+  const sql = new SQL(databaseUrl);
 
   const env: Bindings = {
-    kv: new RedisKVStore(redis),
+    kv: new BunRedisKVStore(redisClient),
     blob: new LocalBlobStore(blobBasePath),
-    sql: new PostgresSQLClient(databaseUrl),
-    queue: new RedisStreamsQueueClient(redis),
+    sql: new BunSQLClient(sql),
+    queue: new BunRedisQueueClient(redisClient),
 
-    APP_ENV: process.env.APP_ENV ?? process.env.NODE_ENV ?? "production",
+    APP_ENV: process.env.APP_ENV ?? "production",
     WORLDSTATE_SOURCE_URL: requireEnv("WORLDSTATE_SOURCE_URL"),
     WORLDSTATE_SOURCE_TOKEN: process.env.WORLDSTATE_SOURCE_TOKEN ?? "",
     VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY ?? "",
@@ -54,12 +43,12 @@ async function buildEnv(): Promise<{ env: Bindings; redis: Redis }> {
     CORS_ALLOWED_ORIGINS: process.env.CORS_ALLOWED_ORIGINS ?? "",
   };
 
-  return { env, redis };
+  return { env, redis: redisClient };
 }
 
-async function ensureConsumerGroup(redis: Redis): Promise<void> {
+async function ensureConsumerGroup(redis: RedisClient): Promise<void> {
   try {
-    await redis.xgroup("CREATE", STREAM_KEY, GROUP_NAME, "$", "MKSTREAM");
+    await redis.send("XGROUP", ["CREATE", STREAM_KEY, GROUP_NAME, "$", "MKSTREAM"]);
     console.log(`[worker] consumer group '${GROUP_NAME}' created`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -77,14 +66,23 @@ async function run(): Promise<void> {
   console.log(`[worker] started as ${CONSUMER_NAME}, reading from ${STREAM_KEY}`);
 
   while (true) {
-    const results = (await redis.xreadgroup(
-      "GROUP", GROUP_NAME, CONSUMER_NAME,
-      "COUNT", "10",
-      "BLOCK", "5000",
-      "STREAMS", STREAM_KEY, ">"
-    )) as Array<[stream: string, entries: XReadGroupEntry[]]> | null;
+    let rawResults: unknown;
+    try {
+      rawResults = await redis.send("XREADGROUP", [
+        "GROUP", GROUP_NAME, CONSUMER_NAME,
+        "COUNT", "10",
+        "BLOCK", "5000",
+        "STREAMS", STREAM_KEY, ">",
+      ]);
+    } catch (err) {
+      console.error("[worker] XREADGROUP error:", err);
+      await Bun.sleep(1000);
+      continue;
+    }
 
-    if (!results || results.length === 0) continue;
+    if (!Array.isArray(rawResults) || rawResults.length === 0) continue;
+
+    const results = rawResults as Array<[stream: string, entries: XReadGroupEntry[]]>;
 
     for (const [, entries] of results) {
       for (const [id, fields] of entries) {
@@ -94,13 +92,13 @@ async function run(): Promise<void> {
           const bodyIndex = fields.indexOf("body");
           if (bodyIndex === -1 || bodyIndex + 1 >= fields.length) {
             console.error(`[worker] message ${id}: missing body field`);
-            await redis.xack(STREAM_KEY, GROUP_NAME, id);
+            await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
             continue;
           }
 
           parsed = JSON.parse(fields[bodyIndex + 1]) as QueueMessage;
           await handleQueueMessage(env, parsed);
-          await redis.xack(STREAM_KEY, GROUP_NAME, id);
+          await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
         } catch (err) {
           console.error(`[worker] message ${id} failed:`, err);
           // Leave in pending for retry; do not XACK

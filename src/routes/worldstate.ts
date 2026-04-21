@@ -1,5 +1,5 @@
-import { Hono } from "hono";
-import { AppEnv } from "../app/types";
+import { Elysia } from "elysia";
+import type { Bindings } from "../app/types";
 import {
   buildCurrentTranslatedRootKey,
   buildTranslatedHashIndexKey,
@@ -30,14 +30,13 @@ type CacheHeadersResult = {
 };
 
 function getCacheHeaders(
-  c: { req: { header: (name: string) => string | undefined } },
+  ifNoneMatch: string | null | undefined,
   responseBody: unknown,
   maxAgeSeconds = 60,
   edgeMaxAgeSeconds = maxAgeSeconds,
   staleWhileRevalidateSeconds = 0
 ): CacheHeadersResult {
   const etag = computeETag(responseBody);
-  const ifNoneMatch = c.req.header("if-none-match");
   const shouldReturn304 = ifNoneMatch === etag;
 
   const cacheControlParts = [
@@ -195,263 +194,268 @@ function summarizeRunQueue(run: PipelineRunRow | null, queueRows: QueueLogRow[],
   };
 }
 
-export function registerWorldStateRoutes(app: Hono<AppEnv>): void {
-  app.get("/worldstate/full", async (c) => {
-    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase() || "en";
+export function worldstatePlugin(env: Bindings) {
+  return new Elysia({ prefix: "/worldstate" })
+    .get("/full", async ({ request, set }) => {
+      const url = new URL(request.url);
+      const lang = (url.searchParams.get("lang") ?? "en").trim().toLowerCase() || "en";
 
-    const payloads = await Promise.all(
-      TOP_LEVEL_WORLDSTATE_KEYS.map(async (rootKey) => {
-        const key = buildCurrentTranslatedRootKey(rootKey, lang);
-        const payload = await c.env.kv.get(key, "json");
-        return { rootKey, payload };
-      })
-    );
+      const payloads = await Promise.all(
+        TOP_LEVEL_WORLDSTATE_KEYS.map(async (rootKey) => {
+          const key = buildCurrentTranslatedRootKey(rootKey, lang);
+          const payload = await env.kv.get(key, "json");
+          return { rootKey, payload };
+        })
+      );
 
-    const combined: Record<string, unknown> = {};
-    const missing: string[] = [];
+      const combined: Record<string, unknown> = {};
+      const missing: string[] = [];
 
-    for (const { rootKey, payload } of payloads) {
-      if (payload !== null) {
-        combined[rootKey] = filterEventMessagesToLang(payload, lang);
-      } else {
-        missing.push(rootKey);
+      for (const { rootKey, payload } of payloads) {
+        if (payload !== null) {
+          combined[rootKey] = filterEventMessagesToLang(payload, lang);
+        } else {
+          missing.push(rootKey);
+        }
       }
-    }
 
-    const responseBody = {
-      ok: true, lang,
-      timestamp: new Date().toISOString(),
-      payloadCount: Object.keys(combined).length,
-      missingKeys: missing,
-      payload: combined,
-    };
+      const responseBody = {
+        ok: true, lang,
+        timestamp: new Date().toISOString(),
+        payloadCount: Object.keys(combined).length,
+        missingKeys: missing,
+        payload: combined,
+      };
 
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 15, 60, 30);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
+      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 15, 60, 30);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    })
 
-  app.get("/worldstate/status", async (c) => {
-    const responseBody = await getWorldStateStatus(c);
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 10, 30, 20);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
+    .get("/status", async ({ request, set }) => {
+      const responseBody = await getWorldStateStatus(env);
+      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 10, 30, 20);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    })
 
-  app.get("/worldstate/runs/:runId/progress", async (c) => {
-    const runId = c.req.param("runId").trim();
-    if (!runId) return c.json({ ok: false, error: "runId is required" }, 400);
+    .get("/runs/current", async ({ request, set, query, error }) => {
+      await Promise.all([
+        ensureDiffTables(env.sql),
+        ensureQueueTables(env.sql),
+      ]);
 
-    await Promise.all([
-      ensureDiffTables(c.env.sql),
-      ensureQueueTables(c.env.sql),
-    ]);
+      const limitParam = Number.parseInt(query.limit ?? "20", 10);
+      const limit = Number.isNaN(limitParam) ? 20 : Math.max(1, Math.min(100, limitParam));
 
-    const [runResult, queueResult, diffResult] = await Promise.all([
-      c.env.sql.prepare(SQL.selectPipelineRunById).bind(runId).all<PipelineRunRow>(),
-      c.env.sql.prepare(SQL.selectQueueLogsByRun).bind(runId).all<QueueLogRow>(),
-      c.env.sql.prepare(SQL.selectChangedRootKeysByRun).bind(runId).all<{ rootKey: string }>(),
-    ]);
+      const recentResult = await env.sql
+        .prepare(SQL.selectRecentPipelineRuns)
+        .bind(limit)
+        .all<PipelineRunRow>();
 
-    const run = runResult.results[0] ?? null;
-    const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
-    const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
+      if (recentResult.results.length === 0) {
+        return error(404, { ok: false, error: "no runs found" });
+      }
 
-    const responseBody = {
-      ok: true, runId, run,
-      queue: {
-        queued: queue.queued, queuedKeys: queue.queuedKeys, queuedKeysCount: queue.queuedKeysCount,
-        processed: queue.processed, failed: queue.failed, pending: queue.pending,
-        status: queue.status, isActive: queue.isActive,
-        startedAt: queue.startedAt, endedAt: queue.endedAt, activeDurationSec: queue.activeDurationSec,
-        progress: queue.progress, progressPercent: queue.progressPercent,
-      },
-      errorRootKeys: queue.errorRootKeys,
-      updatedAt: new Date().toISOString(),
-    };
+      const summaries = await Promise.all(
+        recentResult.results.map(async (run) => {
+          const [queueResult, diffResult] = await Promise.all([
+            env.sql.prepare(SQL.selectQueueLogsByRun).bind(run.runId).all<QueueLogRow>(),
+            env.sql.prepare(SQL.selectChangedRootKeysByRun).bind(run.runId).all<{ rootKey: string }>(),
+          ]);
 
-    const { shouldReturn304, headers } = queue.isActive
-      ? getCacheHeaders(c, responseBody, 5, 10, 10)
-      : getCacheHeaders(c, responseBody, 30, 120, 30);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
+          const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
+          const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
 
-  app.get("/worldstate/runs/current", async (c) => {
-    await Promise.all([
-      ensureDiffTables(c.env.sql),
-      ensureQueueTables(c.env.sql),
-    ]);
+          return {
+            run,
+            queue: {
+              queued: queue.queued, queuedKeys: queue.queuedKeys, queuedKeysCount: queue.queuedKeysCount,
+              processed: queue.processed, failed: queue.failed, pending: queue.pending,
+              status: queue.status, isActive: queue.isActive,
+              startedAt: queue.startedAt, endedAt: queue.endedAt, activeDurationSec: queue.activeDurationSec,
+              progress: queue.progress, progressPercent: queue.progressPercent,
+            },
+            errorRootKeys: queue.errorRootKeys,
+          };
+        })
+      );
 
-    const limitParam = Number.parseInt(c.req.query("limit") ?? "20", 10);
-    const limit = Number.isNaN(limitParam) ? 20 : Math.max(1, Math.min(100, limitParam));
+      const active = summaries.find((item) => item.queue.pending > 0) ?? null;
+      const latestCompleted = summaries.find((item) => item.queue.pending === 0) ?? null;
+      const latestFallback = summaries[0] ?? null;
+      const latest = latestCompleted ?? latestFallback;
+      const selected = active ?? latest;
 
-    const recentResult = await c.env.sql
-      .prepare(SQL.selectRecentPipelineRuns)
-      .bind(limit)
-      .all<PipelineRunRow>();
+      if (!selected || !latest) return error(404, { ok: false, error: "no runs found" });
 
-    if (recentResult.results.length === 0) {
-      return c.json({ ok: false, error: "no runs found" }, 404);
-    }
+      const responseBody = {
+        ok: true,
+        mode: active ? "active" : "latest",
+        selected, active, latest,
+        scannedRuns: summaries.length,
+        updatedAt: new Date().toISOString(),
+      };
 
-    const summaries = await Promise.all(
-      recentResult.results.map(async (run) => {
-        const [queueResult, diffResult] = await Promise.all([
-          c.env.sql.prepare(SQL.selectQueueLogsByRun).bind(run.runId).all<QueueLogRow>(),
-          c.env.sql.prepare(SQL.selectChangedRootKeysByRun).bind(run.runId).all<{ rootKey: string }>(),
-        ]);
+      const { shouldReturn304, headers } = active
+        ? getCacheHeaders(request.headers.get("if-none-match"), responseBody, 5, 10, 10)
+        : getCacheHeaders(request.headers.get("if-none-match"), responseBody, 15, 60, 20);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    })
 
-        const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
-        const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
+    .get("/runs/:runId/progress", async ({ request, set, params, error }) => {
+      const runId = params.runId.trim();
+      if (!runId) return error(400, { ok: false, error: "runId is required" });
 
-        return {
-          run,
-          queue: {
-            queued: queue.queued, queuedKeys: queue.queuedKeys, queuedKeysCount: queue.queuedKeysCount,
-            processed: queue.processed, failed: queue.failed, pending: queue.pending,
-            status: queue.status, isActive: queue.isActive,
-            startedAt: queue.startedAt, endedAt: queue.endedAt, activeDurationSec: queue.activeDurationSec,
-            progress: queue.progress, progressPercent: queue.progressPercent,
-          },
-          errorRootKeys: queue.errorRootKeys,
-        };
-      })
-    );
+      await Promise.all([
+        ensureDiffTables(env.sql),
+        ensureQueueTables(env.sql),
+      ]);
 
-    const active = summaries.find((item) => item.queue.pending > 0) ?? null;
-    const latestCompleted = summaries.find((item) => item.queue.pending === 0) ?? null;
-    const latestFallback = summaries[0] ?? null;
-    const latest = latestCompleted ?? latestFallback;
-    const selected = active ?? latest;
+      const [runResult, queueResult, diffResult] = await Promise.all([
+        env.sql.prepare(SQL.selectPipelineRunById).bind(runId).all<PipelineRunRow>(),
+        env.sql.prepare(SQL.selectQueueLogsByRun).bind(runId).all<QueueLogRow>(),
+        env.sql.prepare(SQL.selectChangedRootKeysByRun).bind(runId).all<{ rootKey: string }>(),
+      ]);
 
-    if (!selected || !latest) return c.json({ ok: false, error: "no runs found" }, 404);
+      const run = runResult.results[0] ?? null;
+      const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
+      const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
 
-    const responseBody = {
-      ok: true,
-      mode: active ? "active" : "latest",
-      selected, active, latest,
-      scannedRuns: summaries.length,
-      updatedAt: new Date().toISOString(),
-    };
-
-    const { shouldReturn304, headers } = active
-      ? getCacheHeaders(c, responseBody, 5, 10, 10)
-      : getCacheHeaders(c, responseBody, 15, 60, 20);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
-
-  app.get("/worldstate/runs/:runId/changes", async (c) => {
-    const runId = c.req.param("runId").trim();
-    if (!runId) return c.json({ ok: false, error: "runId is required" }, 400);
-
-    const rootKey = c.req.query("rootKey")?.trim() || undefined;
-
-    await ensureDiffTables(c.env.sql);
-
-    type ItemChangeRow = {
-      id: number;
-      rootKey: string;
-      itemId: string;
-      changeType: string;
-      previousHash: string | null;
-      nextHash: string | null;
-      createdAt: string;
-    };
-
-    const result = rootKey
-      ? await c.env.sql.prepare(SQL.selectItemChangesByRunAndRootKey).bind(runId, rootKey).all<ItemChangeRow>()
-      : await c.env.sql.prepare(SQL.selectItemChangesByRun).bind(runId).all<ItemChangeRow>();
-
-    const responseBody = {
-      ok: true,
-      runId,
-      rootKey: rootKey ?? null,
-      count: result.results.length,
-      changes: result.results,
-    };
-
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 60, 300, 120);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
-
-  app.get("/worldstate/translated/:rootKey", async (c) => {
-    const rootKey = c.req.param("rootKey");
-    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase() || "en";
-    const key = buildCurrentTranslatedRootKey(rootKey, lang);
-    const payload = await c.env.kv.get(key, "json");
-
-    if (payload === null) {
-      return c.json({ ok: false, error: "translated payload not found", rootKey, lang, key }, 404);
-    }
-
-    const filtered = filterEventMessagesToLang(payload, lang);
-    const responseBody = { ok: true, rootKey, lang, key, payload: filtered };
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 20, 60, 30);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
-
-  app.get("/worldstate/translated/:rootKey/runs/:runId", async (c) => {
-    const rootKey = c.req.param("rootKey");
-    const runId = c.req.param("runId");
-    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase() || "en";
-    const key = buildTranslatedRootKey(rootKey, lang, runId);
-    const payload = await c.env.kv.get(key, "json");
-
-    if (payload === null) {
-      return c.json({ ok: false, error: "translated run payload not found", rootKey, runId, lang, key }, 404);
-    }
-
-    const filtered = filterEventMessagesToLang(payload, lang);
-    const responseBody = { ok: true, rootKey, runId, lang, key, payload: filtered };
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300, 3600, 300);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
-
-  app.get("/worldstate/translated/:rootKey/hashes/:hash", async (c) => {
-    const rootKey = c.req.param("rootKey");
-    const hash = c.req.param("hash");
-    const lang = (c.req.query("lang") ?? "en").trim().toLowerCase() || "en";
-
-    const hashIndexKey = buildTranslatedHashIndexKey(rootKey, lang, hash);
-    const runKey = await c.env.kv.get(hashIndexKey);
-    if (!runKey) {
-      return c.json({ ok: false, error: "translated payload not found for hash", rootKey, lang, hash }, 404);
-    }
-
-    const payload = await c.env.kv.get(runKey, "json");
-    if (payload === null) {
-      return c.json({ ok: false, error: "translated payload not found", rootKey, lang, hash }, 404);
-    }
-
-    return c.json(
-      { ok: true, rootKey, lang, hash, payload },
-      {
-        headers: {
-          "cache-control": "public, max-age=31536000, s-maxage=31536000, immutable",
+      const responseBody = {
+        ok: true, runId, run,
+        queue: {
+          queued: queue.queued, queuedKeys: queue.queuedKeys, queuedKeysCount: queue.queuedKeysCount,
+          processed: queue.processed, failed: queue.failed, pending: queue.pending,
+          status: queue.status, isActive: queue.isActive,
+          startedAt: queue.startedAt, endedAt: queue.endedAt, activeDurationSec: queue.activeDurationSec,
+          progress: queue.progress, progressPercent: queue.progressPercent,
         },
+        errorRootKeys: queue.errorRootKeys,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const { shouldReturn304, headers } = queue.isActive
+        ? getCacheHeaders(request.headers.get("if-none-match"), responseBody, 5, 10, 10)
+        : getCacheHeaders(request.headers.get("if-none-match"), responseBody, 30, 120, 30);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    })
+
+    .get("/runs/:runId/changes", async ({ request, set, params, query, error }) => {
+      const runId = params.runId.trim();
+      if (!runId) return error(400, { ok: false, error: "runId is required" });
+
+      const rootKey = query.rootKey?.trim() || undefined;
+
+      await ensureDiffTables(env.sql);
+
+      type ItemChangeRow = {
+        id: number;
+        rootKey: string;
+        itemId: string;
+        changeType: string;
+        previousHash: string | null;
+        nextHash: string | null;
+        createdAt: string;
+      };
+
+      const result = rootKey
+        ? await env.sql.prepare(SQL.selectItemChangesByRunAndRootKey).bind(runId, rootKey).all<ItemChangeRow>()
+        : await env.sql.prepare(SQL.selectItemChangesByRun).bind(runId).all<ItemChangeRow>();
+
+      const responseBody = {
+        ok: true,
+        runId,
+        rootKey: rootKey ?? null,
+        count: result.results.length,
+        changes: result.results,
+      };
+
+      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 60, 300, 120);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    })
+
+    .get("/translated/:rootKey", async ({ request, set, params, query, error }) => {
+      const rootKey = params.rootKey;
+      const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
+      const key = buildCurrentTranslatedRootKey(rootKey, lang);
+      const payload = await env.kv.get(key, "json");
+
+      if (payload === null) {
+        return error(404, { ok: false, error: "translated payload not found", rootKey, lang, key });
       }
-    );
-  });
 
-  app.get("/worldstate/stats", async (c) => {
-    const days = Number.parseInt(c.req.query("days") ?? "30", 10);
-    const responseBody = await getWorldStateStats(c, Number.isNaN(days) ? 30 : days);
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300, 900, 300);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
+      const filtered = filterEventMessagesToLang(payload, lang);
+      const responseBody = { ok: true, rootKey, lang, key, payload: filtered };
+      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 20, 60, 30);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    })
 
-  app.get("/worldstate/stats/daily", async (c) => {
-    const days = Number.parseInt(c.req.query("days") ?? "30", 10);
-    const rootKey = c.req.query("rootKey") ?? undefined;
-    const responseBody = await getWorldStateDailyStats(c, Number.isNaN(days) ? 30 : days, rootKey);
-    const { shouldReturn304, headers } = getCacheHeaders(c, responseBody, 300, 900, 300);
-    if (shouldReturn304) return c.body(null, 304, headers);
-    return c.json(responseBody, { headers });
-  });
+    .get("/translated/:rootKey/runs/:runId", async ({ request, set, params, query, error }) => {
+      const rootKey = params.rootKey;
+      const runId = params.runId;
+      const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
+      const key = buildTranslatedRootKey(rootKey, lang, runId);
+      const payload = await env.kv.get(key, "json");
+
+      if (payload === null) {
+        return error(404, { ok: false, error: "translated run payload not found", rootKey, runId, lang, key });
+      }
+
+      const filtered = filterEventMessagesToLang(payload, lang);
+      const responseBody = { ok: true, rootKey, runId, lang, key, payload: filtered };
+      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 300, 3600, 300);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    })
+
+    .get("/translated/:rootKey/hashes/:hash", async ({ set, params, query, error }) => {
+      const rootKey = params.rootKey;
+      const hash = params.hash;
+      const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
+
+      const hashIndexKey = buildTranslatedHashIndexKey(rootKey, lang, hash);
+      const runKey = await env.kv.get(hashIndexKey);
+      if (!runKey) {
+        return error(404, { ok: false, error: "translated payload not found for hash", rootKey, lang, hash });
+      }
+
+      const payload = await env.kv.get(runKey, "json");
+      if (payload === null) {
+        return error(404, { ok: false, error: "translated payload not found", rootKey, lang, hash });
+      }
+
+      set.headers["cache-control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
+      return { ok: true, rootKey, lang, hash, payload };
+    })
+
+    .get("/stats", async ({ request, set, query }) => {
+      const days = Number.parseInt(query.days ?? "30", 10);
+      const responseBody = await getWorldStateStats(env, Number.isNaN(days) ? 30 : days);
+      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 300, 900, 300);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    })
+
+    .get("/stats/daily", async ({ request, set, query }) => {
+      const days = Number.parseInt(query.days ?? "30", 10);
+      const rootKey = query.rootKey ?? undefined;
+      const responseBody = await getWorldStateDailyStats(env, Number.isNaN(days) ? 30 : days, rootKey);
+      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 300, 900, 300);
+      if (shouldReturn304) return new Response(null, { status: 304, headers });
+      Object.assign(set.headers, headers);
+      return responseBody;
+    });
 }

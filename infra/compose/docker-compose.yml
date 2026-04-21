@@ -23,7 +23,7 @@ services:
       context: ../..
       dockerfile: infra/docker/Dockerfile
     restart: unless-stopped
-    command: ["node", "dist/worker.js"]
+    command: ["bun", "src/worker.ts"]
     env_file: ../../.env
     volumes:
       - blob_data:/app/blob

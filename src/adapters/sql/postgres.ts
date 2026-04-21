@@ -1,7 +1,6 @@
-import { Pool, PoolClient } from "pg";
+import { SQL } from "bun";
 import type { SQLClient, PreparedStatement, BoundStatement } from "../../app/types";
 
-// Internal interface to carry the resolved SQL/params through batch()
 interface ResolvedStatement extends BoundStatement {
   readonly _sql: string;
   readonly _params: unknown[];
@@ -12,84 +11,54 @@ function convertPlaceholders(sql: string): string {
   return sql.replace(/\?/g, () => `$${++idx}`);
 }
 
-function makeStatement(pool: Pool, sql: string, params: unknown[]): ResolvedStatement {
+// Bun.sql returns Date objects for timestamp columns; normalise to ISO strings
+function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[k] = v instanceof Date ? v.toISOString() : v;
+  }
+  return out;
+}
+
+function makeStatement(sql: SQL, query: string, params: unknown[]): ResolvedStatement {
   return {
-    _sql: sql,
+    _sql: query,
     _params: params,
 
     async run(): Promise<void> {
-      await pool.query(sql, params);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await sql.unsafe(query, params as any[]);
     },
 
     async all<T>(): Promise<{ results: T[] }> {
-      const result = await pool.query(sql, params);
-      return { results: result.rows as T[] };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rows = (await sql.unsafe(query, params as any[])) as Record<string, unknown>[];
+      return { results: rows.map(normalizeRow) as T[] };
     },
   };
 }
 
-async function runWithClient(client: PoolClient, stmt: ResolvedStatement): Promise<void> {
-  await client.query(stmt._sql, stmt._params);
-}
-
-export class PostgresSQLClient implements SQLClient {
-  private readonly pool: Pool;
-
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
-  }
+export class BunSQLClient implements SQLClient {
+  constructor(private readonly sql: SQL) {}
 
   prepare(rawSql: string): PreparedStatement {
-    const sql = convertPlaceholders(rawSql);
+    const query = convertPlaceholders(rawSql);
     return {
-      bind: (...args: unknown[]): BoundStatement => makeStatement(this.pool, sql, args),
+      bind: (...args: unknown[]): BoundStatement => makeStatement(this.sql, query, args),
     };
   }
 
   async batch(stmts: BoundStatement[]): Promise<void> {
     const resolved = stmts as ResolvedStatement[];
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
+    await this.sql.begin(async (tx) => {
       for (const stmt of resolved) {
-        await runWithClient(client, stmt);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await tx.unsafe(stmt._sql, stmt._params as any[]);
       }
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
+    });
   }
 }
 
-export function createPostgresClient(pool: Pool): SQLClient {
-  return {
-    prepare(rawSql: string): PreparedStatement {
-      const sql = convertPlaceholders(rawSql);
-      return {
-        bind(...args: unknown[]): BoundStatement {
-          return makeStatement(pool, sql, args);
-        },
-      };
-    },
-
-    async batch(stmts: BoundStatement[]): Promise<void> {
-      const resolved = stmts as ResolvedStatement[];
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        for (const stmt of resolved) {
-          await runWithClient(client, stmt);
-        }
-        await client.query("COMMIT");
-      } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
-      } finally {
-        client.release();
-      }
-    },
-  };
+export function createBunSQLClient(databaseUrl: string): SQLClient {
+  return new BunSQLClient(new SQL(databaseUrl));
 }

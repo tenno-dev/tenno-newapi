@@ -1,7 +1,7 @@
-import Redis from "ioredis";
+import { Redis } from "bun";
 import type { KVStore, KVListResult } from "../../app/types";
 
-export class RedisKVStore implements KVStore {
+export class BunRedisKVStore implements KVStore {
   constructor(private readonly redis: Redis) {}
 
   get(key: string): Promise<string | null>;
@@ -21,7 +21,7 @@ export class RedisKVStore implements KVStore {
 
   async put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void> {
     if (opts?.expirationTtl && opts.expirationTtl > 0) {
-      await this.redis.set(key, value, "EX", opts.expirationTtl);
+      await this.redis.set(key, value, { ex: opts.expirationTtl });
     } else {
       await this.redis.set(key, value);
     }
@@ -38,16 +38,20 @@ export class RedisKVStore implements KVStore {
     const count = opts.limit ?? 50;
     const startCursor = opts.cursor ? parseInt(opts.cursor, 10) : 0;
 
-    const [nextCursor, keys] = await this.redis.scan(startCursor, "MATCH", pattern, "COUNT", count);
+    const [nextCursorStr, keys] = (await this.redis.call(
+      "SCAN", String(startCursor), "MATCH", pattern, "COUNT", String(count)
+    )) as [string, string[]];
+
+    const nextCursor = parseInt(nextCursorStr, 10);
 
     return {
       keys: keys.sort().map((name) => ({ name })),
-      list_complete: nextCursor === "0",
-      cursor: nextCursor !== "0" ? nextCursor : undefined,
+      list_complete: nextCursor === 0,
+      cursor: nextCursor !== 0 ? String(nextCursor) : undefined,
     };
   }
 }
 
-export function createRedisKVStore(redis: Redis): KVStore {
-  return new RedisKVStore(redis);
+export function createBunRedisKVStore(redis: Redis): KVStore {
+  return new BunRedisKVStore(redis);
 }

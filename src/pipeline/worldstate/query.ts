@@ -1,4 +1,4 @@
-import { AppContext } from "../../app/types";
+import type { Bindings } from "../../app/types";
 import { loadLatestRunMeta } from "../../cache/store";
 import { classifyPushCandidateKeys } from "../classification";
 import { getItemChangeDailyStats, getItemChangeStats, getPipelineRunCount } from "../persistence";
@@ -40,23 +40,23 @@ function buildSourceStatus(configuredSource: string | undefined, configuredToken
   }
 }
 
-export async function getWorldStateStatus(c: AppContext) {
+export async function getWorldStateStatus(env: Bindings) {
   const [latestRun, rootHashes, totalRuns] = await Promise.all([
-    loadLatestRunMeta(c.env.kv),
-    loadCurrentRootHashes(c.env.kv),
-    getPipelineRunCount(c.env.sql),
+    loadLatestRunMeta(env.kv),
+    loadCurrentRootHashes(env.kv),
+    getPipelineRunCount(env.sql),
   ]);
 
   return buildWorldStateStatusModel({
     latestRun,
     rootHashCount: Object.keys(rootHashes).length,
     d1RunCount: totalRuns,
-    source: buildSourceStatus(c.env.WORLDSTATE_SOURCE_URL, c.env.WORLDSTATE_SOURCE_TOKEN),
+    source: buildSourceStatus(env.WORLDSTATE_SOURCE_URL, env.WORLDSTATE_SOURCE_TOKEN),
   });
 }
 
-export async function getLatestPushCandidates(c: AppContext) {
-  const latestRun = await loadLatestRunMeta(c.env.kv);
+export async function getLatestPushCandidates(env: Bindings) {
+  const latestRun = await loadLatestRunMeta(env.kv);
   const changedRootKeys = latestRun?.changedRootKeys ?? [];
   const classification = classifyPushCandidateKeys(changedRootKeys);
 
@@ -69,9 +69,9 @@ export async function getLatestPushCandidates(c: AppContext) {
   };
 }
 
-export async function getWorldStateStats(c: AppContext, days: number) {
+export async function getWorldStateStats(env: Bindings, days: number) {
   const safeDays = Math.max(1, Math.min(days, 365));
-  const rootKeyStats = await getItemChangeStats(c.env.sql, safeDays);
+  const rootKeyStats = await getItemChangeStats(env.sql, safeDays);
 
   return {
     ok: true,
@@ -80,9 +80,9 @@ export async function getWorldStateStats(c: AppContext, days: number) {
   };
 }
 
-export async function getWorldStateDailyStats(c: AppContext, days: number, rootKey?: string) {
+export async function getWorldStateDailyStats(env: Bindings, days: number, rootKey?: string) {
   const safeDays = Math.max(1, Math.min(days, 365));
-  const dailyRootKeyStats = await getItemChangeDailyStats(c.env.sql, safeDays, rootKey);
+  const dailyRootKeyStats = await getItemChangeDailyStats(env.sql, safeDays, rootKey);
 
   return {
     ok: true,

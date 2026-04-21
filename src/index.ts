@@ -1,30 +1,17 @@
-import pg from "pg";
-import { serve } from "@hono/node-server";
-import { Hono } from "hono";
-import { cors } from "hono/cors";
-import cron from "node-cron";
-import Redis from "ioredis";
-import { AppEnv, Bindings } from "./app/types";
-import { RedisKVStore } from "./adapters/kv/redis";
+import { Elysia } from "elysia";
+import { cors } from "@elysiajs/cors";
+import { RedisClient, SQL } from "bun";
+import type { Bindings } from "./app/types";
+import { BunRedisKVStore } from "./adapters/kv/redis";
 import { LocalBlobStore } from "./adapters/blob/local";
-import { PostgresSQLClient } from "./adapters/sql/postgres";
-import { RedisStreamsQueueClient } from "./adapters/queue/redis-streams";
-import { registerCoreRoutes } from "./routes/core";
-import { registerWorldStateRoutes } from "./routes/worldstate";
-import { registerDebugRoutes } from "./routes/debug";
-import { pushRoutes } from "./routes/push";
+import { BunSQLClient } from "./adapters/sql/postgres";
+import { BunRedisQueueClient } from "./adapters/queue/redis-streams";
+import { corePlugin } from "./routes/core";
+import { worldstatePlugin } from "./routes/worldstate";
+import { debugPlugin } from "./routes/debug";
+import { pushPlugin } from "./routes/push";
 import { executeWorldStatePush } from "./pipeline/worldstate";
 import { executeTranslationSync } from "./pipeline/translations";
-
-// Parse pg TIMESTAMPTZ and TIMESTAMP columns as ISO strings
-pg.types.setTypeParser(
-  pg.types.builtins.TIMESTAMPTZ,
-  (val: string) => new Date(val.replace(" ", "T") + (val.includes("+") || val.endsWith("Z") ? "" : "Z")).toISOString()
-);
-pg.types.setTypeParser(
-  pg.types.builtins.TIMESTAMP,
-  (val: string) => new Date(val.replace(" ", "T") + "Z").toISOString()
-);
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -37,15 +24,16 @@ function buildEnv(): Bindings {
   const databaseUrl = requireEnv("DATABASE_URL");
   const blobBasePath = process.env.BLOB_BASE_PATH ?? "/app/blob";
 
-  const redis = new Redis(redisUrl, { lazyConnect: false, maxRetriesPerRequest: 3 });
+  const redisClient = new RedisClient(redisUrl);
+  const sql = new SQL(databaseUrl);
 
   return {
-    kv: new RedisKVStore(redis),
+    kv: new BunRedisKVStore(redisClient),
     blob: new LocalBlobStore(blobBasePath),
-    sql: new PostgresSQLClient(databaseUrl),
-    queue: new RedisStreamsQueueClient(redis),
+    sql: new BunSQLClient(sql),
+    queue: new BunRedisQueueClient(redisClient),
 
-    APP_ENV: process.env.APP_ENV ?? process.env.NODE_ENV ?? "production",
+    APP_ENV: process.env.APP_ENV ?? "production",
     WORLDSTATE_SOURCE_URL: requireEnv("WORLDSTATE_SOURCE_URL"),
     WORLDSTATE_SOURCE_TOKEN: process.env.WORLDSTATE_SOURCE_TOKEN ?? "",
     VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY ?? "",
@@ -61,50 +49,39 @@ function buildEnv(): Bindings {
 
 const env = buildEnv();
 
-const app = new Hono<AppEnv>();
-
-app.use(
-  "*",
-  cors({
-    origin: (origin) => {
-      const configured = env.CORS_ALLOWED_ORIGINS
-        ? env.CORS_ALLOWED_ORIGINS.split(",").map((e: string) => e.trim()).filter(Boolean)
-        : [];
-
-      const allowed = new Set<string>([
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        ...configured,
-      ]);
-
-      if (!origin) return "*";
-      return allowed.has(origin) ? origin : "";
-    },
-    allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-    maxAge: 86400,
-  })
-);
-
-registerCoreRoutes(app);
-registerWorldStateRoutes(app);
-registerDebugRoutes(app);
-app.route("/", pushRoutes);
+const allowedOrigins = new Set<string>([
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  ...(env.CORS_ALLOWED_ORIGINS
+    ? env.CORS_ALLOWED_ORIGINS.split(",").map((e) => e.trim()).filter(Boolean)
+    : []),
+]);
 
 const port = Number(process.env.PORT ?? 3000);
 
-serve(
-  {
-    fetch: (req) => app.fetch(req, env),
-    port,
-  },
-  () => {
+new Elysia()
+  .use(
+    cors({
+      origin: (request: Request) => {
+        const origin = request.headers.get("origin");
+        if (!origin) return true;
+        return allowedOrigins.has(origin);
+      },
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+      maxAge: 86400,
+    })
+  )
+  .use(corePlugin(env))
+  .use(worldstatePlugin(env))
+  .use(debugPlugin(env))
+  .use(pushPlugin(env))
+  .listen(port, () => {
     console.log(`[api] listening on port ${port}`);
-  }
-);
+  });
 
 // Worldstate push — every minute
-cron.schedule("*/1 * * * *", async () => {
+Bun.cron("*/1 * * * *", async () => {
   try {
     await executeWorldStatePush(env, { dryRun: false, force: false });
   } catch (err) {
@@ -113,7 +90,7 @@ cron.schedule("*/1 * * * *", async () => {
 });
 
 // Translation sync — daily at midnight
-cron.schedule("0 0 * * *", async () => {
+Bun.cron("0 0 * * *", async () => {
   try {
     await executeTranslationSync(env);
   } catch (err) {

@@ -1,5 +1,3 @@
-import { Context } from "hono";
-
 // ---------------------------------------------------------------------------
 // KV Store (replaces Cloudflare KVNamespace)
 // ---------------------------------------------------------------------------
@@ -84,7 +82,7 @@ export interface QueueClient {
 }
 
 // ---------------------------------------------------------------------------
-// Bindings — injected into every Hono context as c.env
+// Bindings — runtime environment injected into routes and workers
 // ---------------------------------------------------------------------------
 
 export type Bindings = {
@@ -105,11 +103,7 @@ export type Bindings = {
   CORS_ALLOWED_ORIGINS?: string;
 };
 
-export type AppEnv = {
-  Bindings: Bindings;
-};
 
-export type AppContext = Context<AppEnv>;
 
 // ---------------------------------------------------------------------------
 // Queue message types (unchanged from original)
