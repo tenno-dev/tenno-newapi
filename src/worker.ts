@@ -64,6 +64,72 @@ async function ensureConsumerGroup(redis: RedisClient): Promise<void> {
 
 type XReadGroupEntry = [id: string, fields: string[]];
 
+type NormalizedEntry = {
+  id: string;
+  fields: Record<string, string>;
+};
+
+function toFieldMap(raw: unknown): Record<string, string> {
+  if (!raw) return {};
+
+  if (Array.isArray(raw)) {
+    const out: Record<string, string> = {};
+    for (let i = 0; i + 1 < raw.length; i += 2) {
+      out[String(raw[i])] = String(raw[i + 1]);
+    }
+    return out;
+  }
+
+  if (typeof raw === "object") {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      out[String(k)] = String(v ?? "");
+    }
+    return out;
+  }
+
+  return {};
+}
+
+function normalizeXReadGroupResults(rawResults: unknown): NormalizedEntry[] {
+  if (!Array.isArray(rawResults) || rawResults.length === 0) return [];
+
+  const entries: NormalizedEntry[] = [];
+
+  for (const streamPart of rawResults as unknown[]) {
+    let messagesRaw: unknown = null;
+
+    if (Array.isArray(streamPart) && streamPart.length >= 2) {
+      // RESP2-like: [stream, [[id, [field, value, ...]], ...]]
+      messagesRaw = streamPart[1];
+    } else if (streamPart && typeof streamPart === "object") {
+      // Some RESP3 decoders may use object keys such as messages/value
+      const obj = streamPart as Record<string, unknown>;
+      messagesRaw = obj.messages ?? obj.value ?? null;
+    }
+
+    if (!Array.isArray(messagesRaw)) continue;
+
+    for (const message of messagesRaw as unknown[]) {
+      if (Array.isArray(message) && message.length >= 2) {
+        const id = String(message[0]);
+        const fields = toFieldMap(message[1]);
+        entries.push({ id, fields });
+        continue;
+      }
+
+      if (message && typeof message === "object") {
+        const obj = message as Record<string, unknown>;
+        const id = typeof obj.id === "string" ? obj.id : String(obj.id ?? "");
+        const fields = toFieldMap(obj.fields ?? obj.message ?? obj.value ?? obj);
+        if (id) entries.push({ id, fields });
+      }
+    }
+  }
+
+  return entries;
+}
+
 async function run(): Promise<void> {
   const { env, redis } = await buildEnv();
   await ensureConsumerGroup(redis);
@@ -85,29 +151,26 @@ async function run(): Promise<void> {
       continue;
     }
 
-    if (!Array.isArray(rawResults) || rawResults.length === 0) continue;
+    const entries = normalizeXReadGroupResults(rawResults);
+    if (entries.length === 0) continue;
 
-    const results = rawResults as Array<[stream: string, entries: XReadGroupEntry[]]>;
+    for (const { id, fields } of entries) {
+      let parsed: QueueMessage | null = null;
 
-    for (const [, entries] of results) {
-      for (const [id, fields] of entries) {
-        let parsed: QueueMessage | null = null;
-
-        try {
-          const bodyIndex = fields.indexOf("body");
-          if (bodyIndex === -1 || bodyIndex + 1 >= fields.length) {
-            console.error(`[worker] message ${id}: missing body field`);
-            await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
-            continue;
-          }
-
-          parsed = JSON.parse(fields[bodyIndex + 1]) as QueueMessage;
-          await handleQueueMessage(env, parsed);
+      try {
+        const bodyRaw = fields.body;
+        if (!bodyRaw) {
+          console.error(`[worker] message ${id}: missing body field`);
           await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
-        } catch (err) {
-          console.error(`[worker] message ${id} failed:`, err);
-          // Leave in pending for retry; do not XACK
+          continue;
         }
+
+        parsed = JSON.parse(bodyRaw) as QueueMessage;
+        await handleQueueMessage(env, parsed);
+        await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
+      } catch (err) {
+        console.error(`[worker] message ${id} failed:`, err);
+        // Leave in pending for retry; do not XACK
       }
     }
   }
