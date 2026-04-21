@@ -12,6 +12,7 @@
   "dependencies": {
     "@elysiajs/cron": "^1.2.0",
     "@elysiajs/cors": "^1.2.0",
+    "@elysiajs/openapi": "^1.2.0",
     "elysia": "^1.2.0"
   },
   "devDependencies": {

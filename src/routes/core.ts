@@ -1,6 +1,5 @@
 import { Elysia } from "elysia";
 import * as os from "os";
-import { ACTIVE_ROUTES } from "../app/routes";
 import type { Bindings } from "../app/types";
 import { executeTranslationSync } from "../pipeline/translations";
 import { executeWorldStatePush } from "../pipeline/worldstate";
@@ -23,134 +22,8 @@ function formatUptime(seconds: number): string {
   return days > 0 ? `${days} ${time}` : time;
 }
 
-function toOpenApiPath(path: string): string {
-  return path.replace(/:([A-Za-z0-9_]+)/g, "{$1}");
-}
-
-function getOperationParameters(rawPath: string): Array<Record<string, unknown>> {
-  const parameters: Array<Record<string, unknown>> = [];
-
-  const pathParamMatches = rawPath.matchAll(/:([A-Za-z0-9_]+)/g);
-  for (const match of pathParamMatches) {
-    const name = match[1];
-    parameters.push({
-      name,
-      in: "path",
-      required: true,
-      schema: { type: "string" },
-    });
-  }
-
-  if (
-    rawPath === "/worldstate/full" ||
-    rawPath === "/worldstate/translated/:rootKey" ||
-    rawPath === "/worldstate/translated/:rootKey/runs/:runId"
-  ) {
-    parameters.push({
-      name: "lang",
-      in: "query",
-      required: false,
-      description: "Language code (default: en)",
-      schema: { type: "string", example: "en" },
-    });
-  }
-
-  if (rawPath === "/worldstate/stats" || rawPath === "/worldstate/stats/daily") {
-    parameters.push({
-      name: "days",
-      in: "query",
-      required: false,
-      description: "Number of days to include (default: 30)",
-      schema: { type: "integer", minimum: 1, example: 30 },
-    });
-  }
-
-  if (rawPath === "/worldstate/stats/daily") {
-    parameters.push({
-      name: "rootKey",
-      in: "query",
-      required: false,
-      description: "Optional worldstate root key filter",
-      schema: { type: "string", example: "Events" },
-    });
-  }
-
-  return parameters;
-}
-
-function buildOpenApiSpec(origin: string) {
-  const publicRoutes = ACTIVE_ROUTES.filter(
-    (entry) =>
-      !entry.includes(" /debug") &&
-      !entry.includes(" /debug-public") &&
-      !entry.includes(" /internal/")
-  );
-
-  const paths: Record<string, Record<string, unknown>> = {};
-  for (const entry of publicRoutes) {
-    const [method, ...pathParts] = entry.split(" ");
-    const rawPath = pathParts.join(" ").trim();
-    if (!method || !rawPath) continue;
-
-    const openApiPath = toOpenApiPath(rawPath);
-    const methodLower = method.toLowerCase();
-
-    if (!paths[openApiPath]) {
-      paths[openApiPath] = {};
-    }
-
-    paths[openApiPath][methodLower] = {
-      summary: `${method} ${rawPath}`,
-      parameters: getOperationParameters(rawPath),
-      responses: {
-        "200": { description: "OK" },
-      },
-    };
-  }
-
-  return {
-    openapi: "3.0.3",
-    info: {
-      title: "Tenno New API",
-      version: "1.0.0",
-      description: "Swagger docs for non-debug routes",
-    },
-    servers: [{ url: origin }],
-    paths,
-  };
-}
-
-const SWAGGER_UI_HTML = `<!DOCTYPE html>
-<html>
-<head>
-  <title>Tenno New API</title>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css">
-</head>
-<body>
-<div id="swagger-ui"></div>
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js"></script>
-<script>window.onload = () => SwaggerUIBundle({ url: "/openapi.json", dom_id: "#swagger-ui" });</script>
-</body>
-</html>`;
-
 export function corePlugin(env: Bindings) {
   return new Elysia()
-    .get("/openapi.json", ({ request, set }) => {
-      const url = new URL(request.url);
-      const protocol = request.headers.get("x-forwarded-proto") || url.protocol.replace(":", "");
-      const host = request.headers.get("host") || url.host;
-      const origin = `${protocol}://${host}`;
-      set.headers["cache-control"] = "public, max-age=3600, s-maxage=86400";
-      return buildOpenApiSpec(origin);
-    })
-
-    .get("/docs", ({ set }) => {
-      set.headers["content-type"] = "text/html; charset=utf-8";
-      return SWAGGER_UI_HTML;
-    })
-
     .get("/", () => Bun.file("./web/static/routes-info.html"))
 
     .get("/health", ({ set }) => {

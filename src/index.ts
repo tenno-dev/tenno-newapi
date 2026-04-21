@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { cron } from "@elysiajs/cron";
+import { openapi } from "@elysiajs/openapi";
 import { RedisClient, SQL } from "bun";
 import type { Bindings } from "./app/types";
 import { BunRedisKVStore } from "./adapters/kv/redis";
@@ -61,6 +62,23 @@ const allowedOrigins = new Set<string>([
 const port = Number(process.env.PORT ?? 3000);
 
 new Elysia()
+  .use(
+    openapi({
+      path: "/docs",
+      specPath: "/openapi.json",
+      provider: "swagger-ui",
+      documentation: {
+        info: {
+          title: "Tenno New API",
+          version: "1.0.0",
+          description: "API documentation for public routes",
+        },
+      },
+      exclude: {
+        paths: [/^\/debug\//, /^\/internal\//],
+      },
+    })
+  )
   .use(
     cors({
       origin: (request: Request) => {
