@@ -21,7 +21,12 @@ async function buildEnv(): Promise<{ env: Bindings; redis: RedisClient }> {
   const databaseUrl = requireEnv("DATABASE_URL");
   const blobBasePath = process.env.BLOB_BASE_PATH ?? "/app/blob";
 
-  const redisClient = new RedisClient(redisUrl);
+  const redisClient = new RedisClient(redisUrl, {
+    enableOfflineQueue: false,
+    connectionTimeout: 5000,
+    maxRetries: 3,
+  });
+  await redisClient.connect();
   const sql = new SQL(databaseUrl);
 
   const env: Bindings = {

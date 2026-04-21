@@ -21,12 +21,17 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function buildEnv(): Bindings {
+async function buildEnv(): Promise<Bindings> {
   const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
   const databaseUrl = requireEnv("DATABASE_URL");
   const blobBasePath = process.env.BLOB_BASE_PATH ?? "/app/blob";
 
-  const redisClient = new RedisClient(redisUrl);
+  const redisClient = new RedisClient(redisUrl, {
+    enableOfflineQueue: false,
+    connectionTimeout: 5000,
+    maxRetries: 3,
+  });
+  await redisClient.connect();
   const sql = new SQL(databaseUrl);
 
   return {
@@ -49,7 +54,7 @@ function buildEnv(): Bindings {
   };
 }
 
-const env = buildEnv();
+const env = await buildEnv();
 
 const allowedOrigins = new Set<string>([
   "http://localhost:5173",
