@@ -241,7 +241,7 @@ export function worldstatePlugin(env: Bindings) {
       return responseBody;
     })
 
-    .get("/runs/current", async ({ request, set, query, error }) => {
+    .get("/runs/current", async ({ request, set, query, status }) => {
       await Promise.all([
         ensureDiffTables(env.sql),
         ensureQueueTables(env.sql),
@@ -256,7 +256,7 @@ export function worldstatePlugin(env: Bindings) {
         .all<PipelineRunRow>();
 
       if (recentResult.results.length === 0) {
-        return error(404, { ok: false, error: "no runs found" });
+        return status(404, { ok: false, error: "no runs found" });
       }
 
       const summaries = await Promise.all(
@@ -289,7 +289,7 @@ export function worldstatePlugin(env: Bindings) {
       const latest = latestCompleted ?? latestFallback;
       const selected = active ?? latest;
 
-      if (!selected || !latest) return error(404, { ok: false, error: "no runs found" });
+      if (!selected || !latest) return status(404, { ok: false, error: "no runs found" });
 
       const responseBody = {
         ok: true,
@@ -307,9 +307,9 @@ export function worldstatePlugin(env: Bindings) {
       return responseBody;
     })
 
-    .get("/runs/:runId/progress", async ({ request, set, params, error }) => {
+    .get("/runs/:runId/progress", async ({ request, set, params, status }) => {
       const runId = params.runId.trim();
-      if (!runId) return error(400, { ok: false, error: "runId is required" });
+      if (!runId) return status(400, { ok: false, error: "runId is required" });
 
       await Promise.all([
         ensureDiffTables(env.sql),
@@ -347,9 +347,9 @@ export function worldstatePlugin(env: Bindings) {
       return responseBody;
     })
 
-    .get("/runs/:runId/changes", async ({ request, set, params, query, error }) => {
+    .get("/runs/:runId/changes", async ({ request, set, params, query, status }) => {
       const runId = params.runId.trim();
-      if (!runId) return error(400, { ok: false, error: "runId is required" });
+      if (!runId) return status(400, { ok: false, error: "runId is required" });
 
       const rootKey = query.rootKey?.trim() || undefined;
 
@@ -383,14 +383,14 @@ export function worldstatePlugin(env: Bindings) {
       return responseBody;
     })
 
-    .get("/translated/:rootKey", async ({ request, set, params, query, error }) => {
+    .get("/translated/:rootKey", async ({ request, set, params, query, status }) => {
       const rootKey = params.rootKey;
       const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
       const key = buildCurrentTranslatedRootKey(rootKey, lang);
       const payload = await env.kv.get(key, "json");
 
       if (payload === null) {
-        return error(404, { ok: false, error: "translated payload not found", rootKey, lang, key });
+        return status(404, { ok: false, error: "translated payload not found", rootKey, lang, key });
       }
 
       const filtered = filterEventMessagesToLang(payload, lang);
@@ -401,7 +401,7 @@ export function worldstatePlugin(env: Bindings) {
       return responseBody;
     })
 
-    .get("/translated/:rootKey/runs/:runId", async ({ request, set, params, query, error }) => {
+    .get("/translated/:rootKey/runs/:runId", async ({ request, set, params, query, status }) => {
       const rootKey = params.rootKey;
       const runId = params.runId;
       const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
@@ -409,7 +409,7 @@ export function worldstatePlugin(env: Bindings) {
       const payload = await env.kv.get(key, "json");
 
       if (payload === null) {
-        return error(404, { ok: false, error: "translated run payload not found", rootKey, runId, lang, key });
+        return status(404, { ok: false, error: "translated run payload not found", rootKey, runId, lang, key });
       }
 
       const filtered = filterEventMessagesToLang(payload, lang);
@@ -420,7 +420,7 @@ export function worldstatePlugin(env: Bindings) {
       return responseBody;
     })
 
-    .get("/translated/:rootKey/hashes/:hash", async ({ set, params, query, error }) => {
+    .get("/translated/:rootKey/hashes/:hash", async ({ set, params, query, status }) => {
       const rootKey = params.rootKey;
       const hash = params.hash;
       const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
@@ -428,12 +428,12 @@ export function worldstatePlugin(env: Bindings) {
       const hashIndexKey = buildTranslatedHashIndexKey(rootKey, lang, hash);
       const runKey = await env.kv.get(hashIndexKey);
       if (!runKey) {
-        return error(404, { ok: false, error: "translated payload not found for hash", rootKey, lang, hash });
+        return status(404, { ok: false, error: "translated payload not found for hash", rootKey, lang, hash });
       }
 
       const payload = await env.kv.get(runKey, "json");
       if (payload === null) {
-        return error(404, { ok: false, error: "translated payload not found", rootKey, lang, hash });
+        return status(404, { ok: false, error: "translated payload not found", rootKey, lang, hash });
       }
 
       set.headers["cache-control"] = "public, max-age=31536000, s-maxage=31536000, immutable";

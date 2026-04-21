@@ -6,7 +6,8 @@
     "start": "bun src/index.ts",
     "start:worker": "bun src/worker.ts",
     "dev": "bun --watch src/index.ts",
-    "dev:worker": "bun --watch src/worker.ts"
+    "dev:worker": "bun --watch src/worker.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@elysiajs/cors": "^1.2.0",
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
-    "bun-types": "^1.2.0"
+    "bun-types": "^1.2.0",
+    "typescript": "^6.0.3"
   }
 }

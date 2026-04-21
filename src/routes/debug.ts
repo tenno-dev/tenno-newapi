@@ -38,9 +38,9 @@ export function debugPlugin(env: Bindings) {
   return new Elysia({ prefix: "/debug" })
     .guard(
       {
-        beforeHandle: ({ request, error }) => {
+        beforeHandle: ({ request, status }) => {
           if (!isDevRequest(env, request.url)) {
-            return error(403, { ok: false, error: "debug routes are only available in dev" });
+            return status(403, { ok: false, error: "debug routes are only available in dev" });
           }
         },
       },

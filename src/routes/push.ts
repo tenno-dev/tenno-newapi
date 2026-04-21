@@ -109,9 +109,9 @@ export function pushPlugin(env: Bindings) {
       return { ok: true, publicKey };
     })
 
-    .get("/subscriptions", async ({ request, set, error }) => {
+    .get("/subscriptions", async ({ request, set, status }) => {
       if (!isAuthorizedPushAdmin(env, request)) {
-        return error(401, { ok: false, error: "unauthorized" });
+        return status(401, { ok: false, error: "unauthorized" });
       }
 
       await ensurePushTables(env.sql);
@@ -157,9 +157,9 @@ export function pushPlugin(env: Bindings) {
       return { ok: true, count: subscriptions.length, subscriptions };
     })
 
-    .post("/subscriptions/clear", async ({ request, set, error }) => {
+    .post("/subscriptions/clear", async ({ request, set, status }) => {
       if (!isAuthorizedPushAdmin(env, request)) {
-        return error(401, { ok: false, error: "unauthorized" });
+        return status(401, { ok: false, error: "unauthorized" });
       }
 
       await ensurePushTables(env.sql);
@@ -173,28 +173,28 @@ export function pushPlugin(env: Bindings) {
       return { ok: true, cleared: true };
     })
 
-    .post("/subscribe", async ({ request, set, body, error }) => {
+    .post("/subscribe", async ({ request, set, body, status }) => {
       if (!isAllowedOrigin(env, request)) {
-        return error(403, { ok: false, error: "origin not allowed" });
+        return status(403, { ok: false, error: "origin not allowed" });
       }
 
       if (!(await checkRateLimit(env, request, "subscribe"))) {
-        return error(429, { ok: false, error: "rate limit exceeded" });
+        return status(429, { ok: false, error: "rate limit exceeded" });
       }
 
       const bodyData = (body ?? null) as SubscribeBody | null;
       if (!bodyData || !isValidSubscription(bodyData)) {
-        return error(400, { ok: false, error: "invalid subscription" });
+        return status(400, { ok: false, error: "invalid subscription" });
       }
 
       if (!isValidHttpsUrl(bodyData.endpoint)) {
-        return error(400, { ok: false, error: "endpoint must be a valid https URL" });
+        return status(400, { ok: false, error: "endpoint must be a valid https URL" });
       }
 
       const langRaw = (bodyData.lang ?? "en").trim().toLowerCase();
       const languageSet = new Set<string>(TRANSLATION_LANGS);
       if (!languageSet.has(langRaw)) {
-        return error(400, { ok: false, error: "unsupported language" });
+        return status(400, { ok: false, error: "unsupported language" });
       }
       const lang = langRaw as (typeof TRANSLATION_LANGS)[number];
 
@@ -202,7 +202,7 @@ export function pushPlugin(env: Bindings) {
       const dedupedRootKeys = Array.from(new Set(requestedRootKeys.map((k) => k.trim()).filter(Boolean)));
 
       if (dedupedRootKeys.length === 0) {
-        return error(400, { ok: false, error: "rootKeys must include at least one key" });
+        return status(400, { ok: false, error: "rootKeys must include at least one key" });
       }
 
       const canonicalRootMap = new Map<string, string>(
@@ -219,17 +219,17 @@ export function pushPlugin(env: Bindings) {
           );
 
       if (normalizedRootKeys.length === 0) {
-        return error(400, { ok: false, error: "no valid rootKeys provided" });
+        return status(400, { ok: false, error: "no valid rootKeys provided" });
       }
 
       const subKeyFilters = normalizeSubKeyFilters(bodyData.subKeyFilters, canonicalRootMap);
       if (normalizedRootKeys.includes("*") && Object.keys(subKeyFilters).length > 0) {
-        return error(400, { ok: false, error: "subKeyFilters cannot be used with wildcard root key" });
+        return status(400, { ok: false, error: "subKeyFilters cannot be used with wildcard root key" });
       }
 
       for (const rootKey of Object.keys(subKeyFilters)) {
         if (!normalizedRootKeys.includes(rootKey)) {
-          return error(400, { ok: false, error: `subKeyFilters root '${rootKey}' is not included in rootKeys` });
+          return status(400, { ok: false, error: `subKeyFilters root '${rootKey}' is not included in rootKeys` });
         }
       }
 
@@ -267,19 +267,19 @@ export function pushPlugin(env: Bindings) {
       return { ok: true, id, lang, rootKeys: normalizedRootKeys, subKeyFilters };
     })
 
-    .post("/unsubscribe", async ({ request, set, body, error }) => {
+    .post("/unsubscribe", async ({ request, set, body, status }) => {
       if (!isAllowedOrigin(env, request)) {
-        return error(403, { ok: false, error: "origin not allowed" });
+        return status(403, { ok: false, error: "origin not allowed" });
       }
 
       if (!(await checkRateLimit(env, request, "unsubscribe"))) {
-        return error(429, { ok: false, error: "rate limit exceeded" });
+        return status(429, { ok: false, error: "rate limit exceeded" });
       }
 
       const bodyData = (body ?? null) as { endpoint?: string } | null;
       const endpoint = bodyData?.endpoint?.trim();
       if (!endpoint || !isValidHttpsUrl(endpoint)) {
-        return error(400, { ok: false, error: "invalid endpoint" });
+        return status(400, { ok: false, error: "invalid endpoint" });
       }
 
       await ensurePushTables(env.sql);

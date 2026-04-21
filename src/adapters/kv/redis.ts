@@ -1,8 +1,8 @@
-import { Redis } from "bun";
+import { RedisClient } from "bun";
 import type { KVStore, KVListResult } from "../../app/types";
 
 export class BunRedisKVStore implements KVStore {
-  constructor(private readonly redis: Redis) {}
+  constructor(private readonly redis: RedisClient) {}
 
   get(key: string): Promise<string | null>;
   get(key: string, type: "json"): Promise<unknown>;
@@ -21,7 +21,7 @@ export class BunRedisKVStore implements KVStore {
 
   async put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void> {
     if (opts?.expirationTtl && opts.expirationTtl > 0) {
-      await this.redis.set(key, value, { ex: opts.expirationTtl });
+      await this.redis.set(key, value, "EX", String(opts.expirationTtl));
     } else {
       await this.redis.set(key, value);
     }
@@ -38,8 +38,8 @@ export class BunRedisKVStore implements KVStore {
     const count = opts.limit ?? 50;
     const startCursor = opts.cursor ? parseInt(opts.cursor, 10) : 0;
 
-    const [nextCursorStr, keys] = (await this.redis.call(
-      "SCAN", String(startCursor), "MATCH", pattern, "COUNT", String(count)
+    const [nextCursorStr, keys] = (await this.redis.send(
+      "SCAN", [String(startCursor), "MATCH", pattern, "COUNT", String(count)]
     )) as [string, string[]];
 
     const nextCursor = parseInt(nextCursorStr, 10);
@@ -52,6 +52,6 @@ export class BunRedisKVStore implements KVStore {
   }
 }
 
-export function createBunRedisKVStore(redis: Redis): KVStore {
+export function createBunRedisKVStore(redis: RedisClient): KVStore {
   return new BunRedisKVStore(redis);
 }
