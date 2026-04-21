@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
+import { cron } from "@elysiajs/cron";
 import { RedisClient, SQL } from "bun";
 import type { Bindings } from "./app/types";
 import { BunRedisKVStore } from "./adapters/kv/redis";
@@ -72,6 +73,32 @@ new Elysia()
       maxAge: 86400,
     })
   )
+  .use(
+    cron({
+      name: "worldstatePush",
+      pattern: "*/1 * * * *",
+      run: async () => {
+        try {
+          await executeWorldStatePush(env, { dryRun: false, force: false });
+        } catch (err) {
+          console.error("[cron] worldstate push failed:", err);
+        }
+      },
+    })
+  )
+  .use(
+    cron({
+      name: "translationSync",
+      pattern: "0 0 * * *",
+      run: async () => {
+        try {
+          await executeTranslationSync(env);
+        } catch (err) {
+          console.error("[cron] translation sync failed:", err);
+        }
+      },
+    })
+  )
   .use(corePlugin(env))
   .use(worldstatePlugin(env))
   .use(debugPlugin(env))
@@ -79,21 +106,3 @@ new Elysia()
   .listen(port, () => {
     console.log(`[api] listening on port ${port}`);
   });
-
-// Worldstate push — every minute
-Bun.cron("*/1 * * * *", async () => {
-  try {
-    await executeWorldStatePush(env, { dryRun: false, force: false });
-  } catch (err) {
-    console.error("[cron] worldstate push failed:", err);
-  }
-});
-
-// Translation sync — daily at midnight
-Bun.cron("0 0 * * *", async () => {
-  try {
-    await executeTranslationSync(env);
-  } catch (err) {
-    console.error("[cron] translation sync failed:", err);
-  }
-});
