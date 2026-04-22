@@ -1,4 +1,4 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import type { Bindings } from "../app/types";
 import {
   buildCurrentTranslatedRootKey,
@@ -14,49 +14,8 @@ import {
 } from "../pipeline/worldstate";
 import { TOP_LEVEL_WORLDSTATE_KEYS } from "../types/worldstate";
 
-function computeETag(obj: unknown): string {
-  const json = JSON.stringify(obj);
-  let hash = 0;
-  for (let i = 0; i < json.length; i++) {
-    hash = ((hash << 5) - hash) + json.charCodeAt(i);
-    hash = hash & hash;
-  }
-  return `W/"${Math.abs(hash).toString(16)}"`;
-}
-
-type CacheHeadersResult = {
-  shouldReturn304: boolean;
-  headers: Record<string, string>;
-};
-
-function getCacheHeaders(
-  ifNoneMatch: string | null | undefined,
-  responseBody: unknown,
-  maxAgeSeconds = 60,
-  edgeMaxAgeSeconds = maxAgeSeconds,
-  staleWhileRevalidateSeconds = 0
-): CacheHeadersResult {
-  const etag = computeETag(responseBody);
-  const shouldReturn304 = ifNoneMatch === etag;
-
-  const cacheControlParts = [
-    "public",
-    `max-age=${maxAgeSeconds}`,
-    `s-maxage=${edgeMaxAgeSeconds}`,
-  ];
-  if (staleWhileRevalidateSeconds > 0) {
-    cacheControlParts.push(`stale-while-revalidate=${staleWhileRevalidateSeconds}`);
-  }
-
-  return {
-    shouldReturn304,
-    headers: {
-      "cache-control": cacheControlParts.join(", "),
-      "etag": etag,
-      "vary": "Accept-Encoding",
-    },
-  };
-}
+// Manual Cache and ETag helpers removed. 
+// @bogeychan/elysia-etag handles this globally now.
 
 function filterEventMessagesToLang(data: unknown, lang: string): unknown {
   const isLangMatch = (item: unknown): boolean => {
@@ -196,9 +155,8 @@ function summarizeRunQueue(run: PipelineRunRow | null, queueRows: QueueLogRow[],
 
 export function worldstatePlugin(env: Bindings) {
   return new Elysia({ prefix: "/worldstate" })
-    .get("/full", async ({ request, set }) => {
-      const url = new URL(request.url);
-      const lang = (url.searchParams.get("lang") ?? "en").trim().toLowerCase() || "en";
+    .get("/full", async ({ query }) => {
+      const lang = query.lang.toLowerCase();
 
       const payloads = await Promise.all(
         TOP_LEVEL_WORLDSTATE_KEYS.map(async (rootKey) => {
@@ -219,40 +177,32 @@ export function worldstatePlugin(env: Bindings) {
         }
       }
 
-      const responseBody = {
+      return {
         ok: true, lang,
         timestamp: new Date().toISOString(),
         payloadCount: Object.keys(combined).length,
         missingKeys: missing,
         payload: combined,
       };
-
-      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 15, 60, 30);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+    }, {
+      query: t.Object({
+        lang: t.String({ default: "en" })
+      })
     })
 
-    .get("/status", async ({ request, set }) => {
-      const responseBody = await getWorldStateStatus(env);
-      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 10, 30, 20);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+    .get("/status", async () => {
+      return getWorldStateStatus(env);
     })
 
-    .get("/runs/current", async ({ request, set, query, status }) => {
+    .get("/runs/current", async ({ query, status }) => {
       await Promise.all([
         ensureDiffTables(env.sql),
         ensureQueueTables(env.sql),
       ]);
 
-      const limitParam = Number.parseInt(query.limit ?? "20", 10);
-      const limit = Number.isNaN(limitParam) ? 20 : Math.max(1, Math.min(100, limitParam));
-
       const recentResult = await env.sql
         .prepare(SQL.selectRecentPipelineRuns)
-        .bind(limit)
+        .bind(query.limit)
         .all<PipelineRunRow>();
 
       if (recentResult.results.length === 0) {
@@ -291,26 +241,21 @@ export function worldstatePlugin(env: Bindings) {
 
       if (!selected || !latest) return status(404, { ok: false, error: "no runs found" });
 
-      const responseBody = {
+      return {
         ok: true,
         mode: active ? "active" : "latest",
         selected, active, latest,
         scannedRuns: summaries.length,
         updatedAt: new Date().toISOString(),
       };
-
-      const { shouldReturn304, headers } = active
-        ? getCacheHeaders(request.headers.get("if-none-match"), responseBody, 5, 10, 10)
-        : getCacheHeaders(request.headers.get("if-none-match"), responseBody, 15, 60, 20);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+    }, {
+      query: t.Object({
+        limit: t.Numeric({ default: 20, minimum: 1, maximum: 100 })
+      })
     })
 
-    .get("/runs/:runId/progress", async ({ request, set, params, status }) => {
+    .get("/runs/:runId/progress", async ({ params, status }) => {
       const runId = params.runId.trim();
-      if (!runId) return status(400, { ok: false, error: "runId is required" });
-
       await Promise.all([
         ensureDiffTables(env.sql),
         ensureQueueTables(env.sql),
@@ -326,7 +271,7 @@ export function worldstatePlugin(env: Bindings) {
       const queuedKeys = Array.from(new Set(diffResult.results.map((row) => row.rootKey)));
       const queue = summarizeRunQueue(run, queueResult.results, queuedKeys);
 
-      const responseBody = {
+      return {
         ok: true, runId, run,
         queue: {
           queued: queue.queued, queuedKeys: queue.queuedKeys, queuedKeysCount: queue.queuedKeysCount,
@@ -338,20 +283,15 @@ export function worldstatePlugin(env: Bindings) {
         errorRootKeys: queue.errorRootKeys,
         updatedAt: new Date().toISOString(),
       };
-
-      const { shouldReturn304, headers } = queue.isActive
-        ? getCacheHeaders(request.headers.get("if-none-match"), responseBody, 5, 10, 10)
-        : getCacheHeaders(request.headers.get("if-none-match"), responseBody, 30, 120, 30);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+    }, {
+      params: t.Object({
+        runId: t.String({ minLength: 1 })
+      })
     })
 
-    .get("/runs/:runId/changes", async ({ request, set, params, query, status }) => {
+    .get("/runs/:runId/changes", async ({ params, query }) => {
       const runId = params.runId.trim();
-      if (!runId) return status(400, { ok: false, error: "runId is required" });
-
-      const rootKey = query.rootKey?.trim() || undefined;
+      const rootKey = query.rootKey?.trim();
 
       await ensureDiffTables(env.sql);
 
@@ -369,23 +309,25 @@ export function worldstatePlugin(env: Bindings) {
         ? await env.sql.prepare(SQL.selectItemChangesByRunAndRootKey).bind(runId, rootKey).all<ItemChangeRow>()
         : await env.sql.prepare(SQL.selectItemChangesByRun).bind(runId).all<ItemChangeRow>();
 
-      const responseBody = {
+      return {
         ok: true,
         runId,
         rootKey: rootKey ?? null,
         count: result.results.length,
         changes: result.results,
       };
-
-      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 60, 300, 120);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+    }, {
+      params: t.Object({
+        runId: t.String({ minLength: 1 })
+      }),
+      query: t.Object({
+        rootKey: t.Optional(t.String())
+      })
     })
 
-    .get("/translated/:rootKey", async ({ request, set, params, query, status }) => {
+    .get("/translated/:rootKey", async ({ params, query, status }) => {
       const rootKey = params.rootKey;
-      const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
+      const lang = query.lang.toLowerCase();
       const key = buildCurrentTranslatedRootKey(rootKey, lang);
       const payload = await env.kv.get(key, "json");
 
@@ -394,17 +336,20 @@ export function worldstatePlugin(env: Bindings) {
       }
 
       const filtered = filterEventMessagesToLang(payload, lang);
-      const responseBody = { ok: true, rootKey, lang, key, payload: filtered };
-      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 20, 60, 30);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+      return { ok: true, rootKey, lang, key, payload: filtered };
+    }, {
+      params: t.Object({
+        rootKey: t.String({ minLength: 1 })
+      }),
+      query: t.Object({
+        lang: t.String({ default: "en" })
+      })
     })
 
-    .get("/translated/:rootKey/runs/:runId", async ({ request, set, params, query, status }) => {
+    .get("/translated/:rootKey/runs/:runId", async ({ params, query, status }) => {
       const rootKey = params.rootKey;
       const runId = params.runId;
-      const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
+      const lang = query.lang.toLowerCase();
       const key = buildTranslatedRootKey(rootKey, lang, runId);
       const payload = await env.kv.get(key, "json");
 
@@ -413,17 +358,21 @@ export function worldstatePlugin(env: Bindings) {
       }
 
       const filtered = filterEventMessagesToLang(payload, lang);
-      const responseBody = { ok: true, rootKey, runId, lang, key, payload: filtered };
-      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 300, 3600, 300);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+      return { ok: true, rootKey, runId, lang, key, payload: filtered };
+    }, {
+      params: t.Object({
+        rootKey: t.String({ minLength: 1 }),
+        runId: t.String({ minLength: 1 })
+      }),
+      query: t.Object({
+        lang: t.String({ default: "en" })
+      })
     })
 
     .get("/translated/:rootKey/hashes/:hash", async ({ set, params, query, status }) => {
       const rootKey = params.rootKey;
       const hash = params.hash;
-      const lang = (query.lang ?? "en").trim().toLowerCase() || "en";
+      const lang = query.lang.toLowerCase();
 
       const hashIndexKey = buildTranslatedHashIndexKey(rootKey, lang, hash);
       const runKey = await env.kv.get(hashIndexKey);
@@ -436,26 +385,34 @@ export function worldstatePlugin(env: Bindings) {
         return status(404, { ok: false, error: "translated payload not found", rootKey, lang, hash });
       }
 
+      // Keep immutable cache for hashed content
       set.headers["cache-control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
       return { ok: true, rootKey, lang, hash, payload };
+    }, {
+      params: t.Object({
+        rootKey: t.String({ minLength: 1 }),
+        hash: t.String({ minLength: 1 })
+      }),
+      query: t.Object({
+        lang: t.String({ default: "en" })
+      })
     })
 
-    .get("/stats", async ({ request, set, query }) => {
-      const days = Number.parseInt(query.days ?? "30", 10);
-      const responseBody = await getWorldStateStats(env, Number.isNaN(days) ? 30 : days);
-      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 300, 900, 300);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+    .get("/stats", async ({ query }) => {
+      return getWorldStateStats(env, query.days);
+    }, {
+      query: t.Object({
+        days: t.Numeric({ default: 30, minimum: 1, maximum: 365 })
+      })
     })
 
-    .get("/stats/daily", async ({ request, set, query }) => {
-      const days = Number.parseInt(query.days ?? "30", 10);
-      const rootKey = query.rootKey ?? undefined;
-      const responseBody = await getWorldStateDailyStats(env, Number.isNaN(days) ? 30 : days, rootKey);
-      const { shouldReturn304, headers } = getCacheHeaders(request.headers.get("if-none-match"), responseBody, 300, 900, 300);
-      if (shouldReturn304) return new Response(null, { status: 304, headers });
-      Object.assign(set.headers, headers);
-      return responseBody;
+    .get("/stats/daily", async ({ query }) => {
+      return getWorldStateDailyStats(env, query.days, query.rootKey);
+    }, {
+      query: t.Object({
+        days: t.Numeric({ default: 30, minimum: 1, maximum: 365 }),
+        rootKey: t.Optional(t.String())
+      })
     });
+;
 }

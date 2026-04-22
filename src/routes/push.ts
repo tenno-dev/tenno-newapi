@@ -1,4 +1,5 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
+import { bearer } from "@elysiajs/bearer";
 import type { Bindings } from "../app/types";
 import { SQL } from "../db/sql";
 import { ensurePushTables } from "../pipeline/retention";
@@ -69,13 +70,10 @@ function isAllowedOrigin(env: Bindings, request: Request): boolean {
   return allowed.has(origin);
 }
 
-function isAuthorizedPushAdmin(env: Bindings, request: Request): boolean {
+export function isAuthorizedPushAdmin(env: Bindings, token: string | undefined): boolean {
   const configured = (env.PUSH_ADMIN_TOKEN ?? env.DEPLOY_TRIGGER_TOKEN ?? "").trim();
   if (!configured) return false;
-
-  const authHeader = request.headers.get("authorization") ?? "";
-  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  return bearerToken === configured;
+  return (token ?? "").trim() === configured;
 }
 
 function normalizeSubKeyFilters(
@@ -99,6 +97,7 @@ function normalizeSubKeyFilters(
 
 export function pushPlugin(env: Bindings) {
   return new Elysia({ prefix: "/push" })
+    .use(bearer())
     .get("/public-key", ({ set }) => {
       const publicKey = env.VAPID_PUBLIC_KEY?.trim();
       if (!publicKey) {
@@ -109,8 +108,8 @@ export function pushPlugin(env: Bindings) {
       return { ok: true, publicKey };
     })
 
-    .get("/subscriptions", async ({ request, set, status }) => {
-      if (!isAuthorizedPushAdmin(env, request)) {
+    .get("/subscriptions", async ({ bearer, status, set }) => {
+      if (!isAuthorizedPushAdmin(env, bearer)) {
         return status(401, { ok: false, error: "unauthorized" });
       }
 
@@ -157,8 +156,8 @@ export function pushPlugin(env: Bindings) {
       return { ok: true, count: subscriptions.length, subscriptions };
     })
 
-    .post("/subscriptions/clear", async ({ request, set, status }) => {
-      if (!isAuthorizedPushAdmin(env, request)) {
+    .post("/subscriptions/clear", async ({ bearer, status, set }) => {
+      if (!isAuthorizedPushAdmin(env, bearer)) {
         return status(401, { ok: false, error: "unauthorized" });
       }
 
@@ -173,7 +172,7 @@ export function pushPlugin(env: Bindings) {
       return { ok: true, cleared: true };
     })
 
-    .post("/subscribe", async ({ request, set, body, status }) => {
+    .post("/subscribe", async ({ request, body, status }) => {
       if (!isAllowedOrigin(env, request)) {
         return status(403, { ok: false, error: "origin not allowed" });
       }
@@ -182,25 +181,13 @@ export function pushPlugin(env: Bindings) {
         return status(429, { ok: false, error: "rate limit exceeded" });
       }
 
-      const bodyData = (body ?? null) as SubscribeBody | null;
-      if (!bodyData || !isValidSubscription(bodyData)) {
-        return status(400, { ok: false, error: "invalid subscription" });
-      }
-
-      if (!isValidHttpsUrl(bodyData.endpoint)) {
-        return status(400, { ok: false, error: "endpoint must be a valid https URL" });
-      }
-
-      const langRaw = (bodyData.lang ?? "en").trim().toLowerCase();
+      const lang = body.lang.toLowerCase();
       const languageSet = new Set<string>(TRANSLATION_LANGS);
-      if (!languageSet.has(langRaw)) {
+      if (!languageSet.has(lang)) {
         return status(400, { ok: false, error: "unsupported language" });
       }
-      const lang = langRaw as (typeof TRANSLATION_LANGS)[number];
 
-      const requestedRootKeys = Array.isArray(bodyData.rootKeys) ? bodyData.rootKeys : [];
-      const dedupedRootKeys = Array.from(new Set(requestedRootKeys.map((k) => k.trim()).filter(Boolean)));
-
+      const dedupedRootKeys = Array.from(new Set(body.rootKeys.map((k) => k.trim()).filter(Boolean)));
       if (dedupedRootKeys.length === 0) {
         return status(400, { ok: false, error: "rootKeys must include at least one key" });
       }
@@ -222,7 +209,7 @@ export function pushPlugin(env: Bindings) {
         return status(400, { ok: false, error: "no valid rootKeys provided" });
       }
 
-      const subKeyFilters = normalizeSubKeyFilters(bodyData.subKeyFilters, canonicalRootMap);
+      const subKeyFilters = normalizeSubKeyFilters(body.subKeyFilters, canonicalRootMap);
       if (normalizedRootKeys.includes("*") && Object.keys(subKeyFilters).length > 0) {
         return status(400, { ok: false, error: "subKeyFilters cannot be used with wildcard root key" });
       }
@@ -235,10 +222,10 @@ export function pushPlugin(env: Bindings) {
 
       await ensurePushTables(env.sql);
 
-      const id = bodyData.endpoint;
+      const id = body.endpoint;
       const now = new Date().toISOString();
       await env.sql.prepare(SQL.upsertPushSubscription)
-        .bind(id, bodyData.endpoint, bodyData.keys.p256dh, bodyData.keys.auth, lang, now, now)
+        .bind(id, body.endpoint, body.keys.p256dh, body.keys.auth, lang, now, now)
         .run();
 
       if (normalizedRootKeys.includes("*")) {
@@ -263,11 +250,21 @@ export function pushPlugin(env: Bindings) {
         await env.sql.batch(statements);
       }
 
-      set.headers["cache-control"] = "no-store";
       return { ok: true, id, lang, rootKeys: normalizedRootKeys, subKeyFilters };
+    }, {
+      body: t.Object({
+        endpoint: t.String({ format: "url", minLength: 1 }),
+        keys: t.Object({
+          p256dh: t.String({ minLength: 1 }),
+          auth: t.String({ minLength: 1 })
+        }),
+        lang: t.String({ default: "en" }),
+        rootKeys: t.Array(t.String(), { minItems: 1 }),
+        subKeyFilters: t.Optional(t.Record(t.String(), t.Array(t.String())))
+      })
     })
 
-    .post("/unsubscribe", async ({ request, set, body, status }) => {
+    .post("/unsubscribe", async ({ request, body, status }) => {
       if (!isAllowedOrigin(env, request)) {
         return status(403, { ok: false, error: "origin not allowed" });
       }
@@ -276,20 +273,17 @@ export function pushPlugin(env: Bindings) {
         return status(429, { ok: false, error: "rate limit exceeded" });
       }
 
-      const bodyData = (body ?? null) as { endpoint?: string } | null;
-      const endpoint = bodyData?.endpoint?.trim();
-      if (!endpoint || !isValidHttpsUrl(endpoint)) {
-        return status(400, { ok: false, error: "invalid endpoint" });
-      }
-
       await ensurePushTables(env.sql);
       await env.sql.batch([
-        env.sql.prepare(SQL.deletePushSubscriptionSubKeysByEndpoint).bind(endpoint),
-        env.sql.prepare(SQL.deletePushSubscriptionRootKeysByEndpoint).bind(endpoint),
-        env.sql.prepare(SQL.deletePushSubscriptionByEndpoint).bind(endpoint),
+        env.sql.prepare(SQL.deletePushSubscriptionSubKeysByEndpoint).bind(body.endpoint),
+        env.sql.prepare(SQL.deletePushSubscriptionRootKeysByEndpoint).bind(body.endpoint),
+        env.sql.prepare(SQL.deletePushSubscriptionByEndpoint).bind(body.endpoint),
       ]);
 
-      set.headers["cache-control"] = "no-store";
       return { ok: true };
+    }, {
+      body: t.Object({
+        endpoint: t.String({ format: "url", minLength: 1 })
+      })
     });
 }

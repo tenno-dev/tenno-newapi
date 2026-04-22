@@ -1,6 +1,6 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { isDevRequest } from "../app/env";
-import { parseBoolean, parseLimit } from "../app/http";
+// Manual parsing utilities removed in favor of TypeBox
 import type { Bindings } from "../app/types";
 import { SQL } from "../db/sql";
 import { ensureQueueTables } from "../pipeline/retention";
@@ -19,10 +19,10 @@ import {
   TRANSLATION_LANGS,
 } from "../pipeline/translations";
 
-async function blobIndexHandler(env: Bindings, query: Record<string, string | undefined>) {
+async function blobIndexHandler(env: Bindings, query: { prefix?: string; cursor?: string; limit: number }) {
   const prefix = query.prefix ?? "";
   const cursor = query.cursor || undefined;
-  const limit = parseLimit(query.limit, 50, 500);
+  const limit = query.limit;
   const list = await env.blob.list({ prefix, cursor, limit });
   return {
     store: "blob",
@@ -64,9 +64,14 @@ export function debugPlugin(env: Bindings) {
 
           .post("/worldstate/push", async ({ query }) =>
             executeWorldStatePush(env, {
-              dryRun: parseBoolean(query.dryRun),
-              force: parseBoolean(query.force),
-            })
+              dryRun: query.dryRun,
+              force: query.force,
+            }), {
+              query: t.Object({
+                dryRun: t.Boolean({ default: false }),
+                force: t.Boolean({ default: false })
+              })
+            }
           )
 
           .get("/worldstate/push-candidates", async () => getLatestPushCandidates(env))
@@ -79,7 +84,7 @@ export function debugPlugin(env: Bindings) {
           })
 
           .get("/translations/view", async ({ query, set }) => {
-            const lang = (query.lang ?? "en").toLowerCase().trim();
+            const lang = query.lang.toLowerCase().trim();
             if (!TRANSLATION_LANGS.includes(lang as (typeof TRANSLATION_LANGS)[number])) {
               set.status = 400;
               return { ok: false, error: `Invalid language: ${lang}`, supportedLanguages: TRANSLATION_LANGS };
@@ -112,43 +117,77 @@ export function debugPlugin(env: Bindings) {
               flatIndex: { count: Object.keys(flatIndex).length, entries: flatIndex },
               objectIndex: { filesCount: objectIndexFileCount, entriesCount: objectIndexEntryCount, structure: objectIndex },
             };
+          }, {
+            query: t.Object({
+              lang: t.String({ default: "en" })
+            })
           })
 
           .get("/queue/index", async ({ query }) => {
-            const limit = parseLimit(query.limit, 50, 500);
             await ensureQueueTables(env.sql);
-            const result = await env.sql.prepare(SQL.selectQueueLogs).bind(limit).all();
-            return { store: "queue", limit, count: result.results.length, items: result.results };
+            const result = await env.sql.prepare(SQL.selectQueueLogs).bind(query.limit).all();
+            return { store: "queue", limit: query.limit, count: result.results.length, items: result.results };
+          }, {
+            query: t.Object({
+              limit: t.Numeric({ default: 50, minimum: 1, maximum: 500 })
+            })
           })
 
-          .get("/blob/index", ({ query }) => blobIndexHandler(env, query as Record<string, string | undefined>))
-          .get("/r2/index", ({ query }) => blobIndexHandler(env, query as Record<string, string | undefined>))
-          .get("/r1/index", ({ query }) => blobIndexHandler(env, query as Record<string, string | undefined>))
+          .get("/blob/index", ({ query }) => blobIndexHandler(env, query), {
+            query: t.Object({
+              prefix: t.Optional(t.String()),
+              cursor: t.Optional(t.String()),
+              limit: t.Numeric({ default: 50, minimum: 1, maximum: 500 })
+            })
+          })
+          .get("/r2/index", ({ query }) => blobIndexHandler(env, query), {
+            query: t.Object({
+              prefix: t.Optional(t.String()),
+              cursor: t.Optional(t.String()),
+              limit: t.Numeric({ default: 50, minimum: 1, maximum: 500 })
+            })
+          })
+          .get("/r1/index", ({ query }) => blobIndexHandler(env, query), {
+            query: t.Object({
+              prefix: t.Optional(t.String()),
+              cursor: t.Optional(t.String()),
+              limit: t.Numeric({ default: 50, minimum: 1, maximum: 500 })
+            })
+          })
 
           .get("/kv/index", async ({ query }) => {
-            const prefix = query.prefix ?? "";
-            const cursor = query.cursor || undefined;
-            const limit = parseLimit(query.limit, 50, 1000);
-            const list = await env.kv.list({ prefix, cursor, limit });
+            const list = await env.kv.list({ prefix: query.prefix, cursor: query.cursor, limit: query.limit });
             return {
-              store: "kv", prefix, limit,
+              store: "kv", prefix: query.prefix, limit: query.limit,
               nextCursor: list.cursor ?? null,
               listComplete: list.list_complete,
               keyCount: list.keys.length,
               keys: list.keys,
             };
+          }, {
+            query: t.Object({
+              prefix: t.String({ default: "" }),
+              cursor: t.Optional(t.String()),
+              limit: t.Numeric({ default: 50, minimum: 1, maximum: 1000 })
+            })
           })
 
           .get("/sql/index", async ({ query }) => {
-            const limit = parseLimit(query.limit, 100, 1000);
-            const result = await env.sql.prepare(SQL.selectSchemaObjects).bind(limit).all();
-            return { store: "sql", limit, count: result.results.length, indexes: result.results };
+            const result = await env.sql.prepare(SQL.selectSchemaObjects).bind(query.limit).all();
+            return { store: "sql", limit: query.limit, count: result.results.length, indexes: result.results };
+          }, {
+            query: t.Object({
+              limit: t.Numeric({ default: 100, minimum: 1, maximum: 1000 })
+            })
           })
 
           .get("/d1/index", async ({ query }) => {
-            const limit = parseLimit(query.limit, 100, 1000);
-            const result = await env.sql.prepare(SQL.selectSchemaObjects).bind(limit).all();
-            return { store: "sql (d1 alias)", limit, count: result.results.length, indexes: result.results };
+            const result = await env.sql.prepare(SQL.selectSchemaObjects).bind(query.limit).all();
+            return { store: "sql (d1 alias)", limit: query.limit, count: result.results.length, indexes: result.results };
+          }, {
+            query: t.Object({
+              limit: t.Numeric({ default: 100, minimum: 1, maximum: 1000 })
+            })
           })
     );
 }

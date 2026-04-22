@@ -1,12 +1,14 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
+import { bearer } from "@elysiajs/bearer";
 import * as os from "os";
 import type { Bindings } from "../app/types";
 import { executeTranslationSync } from "../pipeline/translations";
 import { executeWorldStatePush } from "../pipeline/worldstate";
-import { parseBoolean } from "../app/http";
+// Removed redundant parseBoolean in favor of TypeBox
 import { processTranslationMessage } from "../queue/translator";
 import { buildCurrentRootPayloadKey } from "../cache/keys";
 import { TRANSLATION_LANGS } from "../pipeline/translations/config";
+import { isAuthorizedPushAdmin } from "./push";
 
 const WARFRAME_WORLDSTATE_URL = "https://api.warframe.com/cdn/worldState.php";
 
@@ -24,6 +26,7 @@ function formatUptime(seconds: number): string {
 
 export function corePlugin(env: Bindings) {
   return new Elysia()
+    .use(bearer())
     .get("/", () => Bun.file("./web/static/routes-info.html"))
 
     .get("/health", ({ set }) => {
@@ -90,38 +93,34 @@ export function corePlugin(env: Bindings) {
       return { ok: response.ok, sourceUrl: WARFRAME_WORLDSTATE_URL, status: response.status, statusText: response.statusText, headers, contentType, parseError, result: parsedBody, rawBody };
     })
 
-    .post("/internal/translations/sync", async ({ request, set }) => {
-      const configuredToken = env.DEPLOY_TRIGGER_TOKEN?.trim();
-      const authHeader = request.headers.get("authorization") ?? "";
-      const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
-      if (!configuredToken) { set.status = 503; return { ok: false, error: "deploy trigger token is not configured" }; }
-      if (!bearerToken || bearerToken !== configuredToken) { set.status = 401; return { ok: false, error: "unauthorized" }; }
+    .post("/internal/translations/sync", async ({ bearer, status }) => {
+      const configuredToken = (env.DEPLOY_TRIGGER_TOKEN ?? "").trim();
+      if (!isAuthorizedPushAdmin(env, bearer)) {
+        return status(401, { ok: false, error: "unauthorized" });
+      }
       const result = await executeTranslationSync(env);
       return { ok: true, trigger: "post-deploy", result };
     })
 
-    .post("/internal/worldstate/push", async ({ request, query, set }) => {
-      const configuredToken = env.DEPLOY_TRIGGER_TOKEN?.trim();
-      const authHeader = request.headers.get("authorization") ?? "";
-      const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
-      if (!configuredToken) { set.status = 503; return { ok: false, error: "deploy trigger token is not configured" }; }
-      if (!bearerToken || bearerToken !== configuredToken) { set.status = 401; return { ok: false, error: "unauthorized" }; }
-      const force = parseBoolean(query.force);
-      const dryRun = parseBoolean(query.dryRun);
-      const result = await executeWorldStatePush(env, { dryRun, force });
-      return { ok: true, trigger: "internal", dryRun, force, result };
+    .post("/internal/worldstate/push", async ({ query, bearer, status }) => {
+      if (!isAuthorizedPushAdmin(env, bearer)) {
+        return status(401, { ok: false, error: "unauthorized" });
+      }
+      const result = await executeWorldStatePush(env, { dryRun: query.dryRun, force: query.force });
+      return { ok: true, trigger: "internal", dryRun: query.dryRun, force: query.force, result };
+    }, {
+      query: t.Object({
+        dryRun: t.Boolean({ default: false }),
+        force: t.Boolean({ default: false })
+      })
     })
 
-    .post("/internal/translations/rebuild-root", async ({ request, query, set }) => {
-      const configuredToken = env.DEPLOY_TRIGGER_TOKEN?.trim();
-      const authHeader = request.headers.get("authorization") ?? "";
-      const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
-      if (!configuredToken) { set.status = 503; return { ok: false, error: "deploy trigger token is not configured" }; }
-      if (!bearerToken || bearerToken !== configuredToken) { set.status = 401; return { ok: false, error: "unauthorized" }; }
+    .post("/internal/translations/rebuild-root", async ({ query, bearer, status }) => {
+      if (!isAuthorizedPushAdmin(env, bearer)) {
+        return status(401, { ok: false, error: "unauthorized" });
+      }
 
-      const rootKey = (query.rootKey ?? "").trim();
-      if (!rootKey) { set.status = 400; return { ok: false, error: "rootKey is required" }; }
-
+      const rootKey = query.rootKey;
       const langsRaw = query.langs?.trim();
       const requestedLangs = langsRaw
         ? langsRaw.split(",").map((v) => v.trim().toLowerCase()).filter(Boolean)
@@ -129,15 +128,13 @@ export function corePlugin(env: Bindings) {
       const supportedSet = new Set<string>(TRANSLATION_LANGS);
       const targetLanguages = Array.from(new Set(requestedLangs)).filter((lang) => supportedSet.has(lang));
       if (targetLanguages.length === 0) {
-        set.status = 400;
-        return { ok: false, error: "no valid languages requested", supported: TRANSLATION_LANGS };
+        return status(400, { ok: false, error: "no valid languages requested", supported: TRANSLATION_LANGS });
       }
 
       const payloadKey = buildCurrentRootPayloadKey(rootKey);
       const hasPayload = await env.kv.get(payloadKey);
       if (!hasPayload) {
-        set.status = 404;
-        return { ok: false, error: `current root payload not found for rootKey '${rootKey}'` };
+        return status(404, { ok: false, error: `current root payload not found for rootKey '${rootKey}'` });
       }
 
       const runId = `${Date.now()}-manual-rebuild-${rootKey}`;
@@ -149,5 +146,10 @@ export function corePlugin(env: Bindings) {
       });
 
       return { ok: true, trigger: "internal", rootKey, runId, fetchedAt, targetLanguages, payloadKey };
+    }, {
+      query: t.Object({
+        rootKey: t.String({ minLength: 1 }),
+        langs: t.Optional(t.String())
+      })
     });
 }

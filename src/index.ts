@@ -1,7 +1,10 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { cron } from "@elysiajs/cron";
 import { openapi } from "@elysiajs/openapi";
+import { logger } from "@bogeychan/elysia-logger";
+import { etag } from "@bogeychan/elysia-etag";
+import compress from "elysia-compress";
 import { RedisClient, SQL } from "bun";
 import type { Bindings } from "./app/types";
 import { BunRedisKVStore } from "./adapters/kv/redis";
@@ -67,6 +70,17 @@ const allowedOrigins = new Set<string>([
 const port = Number(Bun.env.PORT ?? 3000);
 
 new Elysia()
+  .use(logger())
+  .use(compress())
+  .use(etag())
+  .onAfterHandle(({ query, response }) => {
+    // Universal "Pretty JSON" feature via query parameter
+    if (query.pretty === "true" && response && typeof response === "object") {
+      return new Response(JSON.stringify(response, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  })
   .use(
     openapi({
       path: "/docs",
