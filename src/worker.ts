@@ -92,11 +92,22 @@ function toFieldMap(raw: unknown): Record<string, string> {
 }
 
 function normalizeXReadGroupResults(rawResults: unknown): NormalizedEntry[] {
-  if (!Array.isArray(rawResults) || rawResults.length === 0) return [];
+  if (!rawResults) return [];
+
+  // RESP3: Bun's Redis client negotiates RESP3 by default. Redis Map types are
+  // returned as plain JS objects ({ streamname: entries[] }) instead of the
+  // RESP2 nested-array format ([[streamname, entries[]], ...]). Convert to the
+  // array format so the rest of the parsing logic works for both protocols.
+  const toProcess: unknown =
+    !Array.isArray(rawResults) && typeof rawResults === "object"
+      ? Object.entries(rawResults as Record<string, unknown>)
+      : rawResults;
+
+  if (!Array.isArray(toProcess) || toProcess.length === 0) return [];
 
   const entries: NormalizedEntry[] = [];
 
-  for (const streamPart of rawResults as unknown[]) {
+  for (const streamPart of toProcess as unknown[]) {
     let messagesRaw: unknown = null;
 
     if (Array.isArray(streamPart) && streamPart.length >= 2) {
