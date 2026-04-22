@@ -6,35 +6,99 @@ import { BunSQLClient } from "./adapters/sql/postgres";
 import { BunRedisQueueClient } from "./adapters/queue/redis-streams";
 import { handleQueueMessage } from "./queue/consumer";
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`Missing required environment variable: ${name}`);
-  return value;
-}
-
 const STREAM_KEY = "worldstate:translate";
 const GROUP_NAME = "workers";
 const CONSUMER_NAME = `consumer-${process.pid}`;
 const MAX_RETRIES = Number(process.env.WORKER_MAX_RETRIES ?? "3");
+const BLOCK_MS = 5000;
+const READ_COUNT = 10;
 
-async function buildEnv(): Promise<{ env: Bindings; redis: RedisClient }> {
+type Resp3Object = Record<string, unknown>;
+
+type StreamEntry = {
+  id: string;
+  fields: Record<string, string>;
+};
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+function asObject(value: unknown): Resp3Object | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Resp3Object;
+}
+
+function toStringFields(value: unknown): Record<string, string> {
+  const obj = asObject(value);
+  if (!obj) return {};
+
+  const out: Record<string, string> = {};
+  for (const [key, fieldValue] of Object.entries(obj)) {
+    out[key] = String(fieldValue ?? "");
+  }
+  return out;
+}
+
+function parseXReadGroupResp3(raw: unknown): StreamEntry[] {
+  const streamMap = asObject(raw);
+  if (!streamMap) return [];
+
+  const entries: StreamEntry[] = [];
+
+  for (const streamMessages of Object.values(streamMap)) {
+    if (!Array.isArray(streamMessages)) continue;
+
+    for (const message of streamMessages as unknown[]) {
+      const msg = asObject(message);
+      if (!msg) continue;
+
+      const id = typeof msg.id === "string" ? msg.id : String(msg.id ?? "");
+      if (!id) continue;
+
+      const fields = toStringFields(msg.fields ?? msg.message ?? msg.value ?? msg);
+      if (!fields.body && typeof msg.body === "string") {
+        fields.body = msg.body;
+      }
+
+      entries.push({ id, fields });
+    }
+  }
+
+  return entries;
+}
+
+function extractRetryCount(payload: Resp3Object | null): number {
+  const value = Number(payload?.__retryCount ?? 0);
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return Math.floor(value);
+}
+
+async function buildContext(): Promise<{ env: Bindings; redis: RedisClient }> {
   const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
   const databaseUrl = requireEnv("DATABASE_URL");
   const blobBasePath = process.env.BLOB_BASE_PATH ?? "/app/blob";
 
-  const redisClient = new RedisClient(redisUrl, {
+  const redis = new RedisClient(redisUrl, {
     enableOfflineQueue: false,
     connectionTimeout: 5000,
     maxRetries: 3,
   });
-  await redisClient.connect();
+  await redis.connect();
+
   const sql = new SQL(databaseUrl);
 
   const env: Bindings = {
-    kv: new BunRedisKVStore(redisClient),
+    kv: new BunRedisKVStore(redis),
     blob: new LocalBlobStore(blobBasePath),
     sql: new BunSQLClient(sql),
-    queue: new BunRedisQueueClient(redisClient),
+    queue: new BunRedisQueueClient(redis),
 
     APP_ENV: process.env.APP_ENV ?? "production",
     WORLDSTATE_SOURCE_URL: requireEnv("WORLDSTATE_SOURCE_URL"),
@@ -49,167 +113,130 @@ async function buildEnv(): Promise<{ env: Bindings; redis: RedisClient }> {
     CORS_ALLOWED_ORIGINS: process.env.CORS_ALLOWED_ORIGINS ?? "",
   };
 
-  return { env, redis: redisClient };
+  return { env, redis };
 }
 
-async function ensureConsumerGroup(redis: RedisClient): Promise<void> {
+async function ensureGroup(redis: RedisClient): Promise<void> {
   try {
     await redis.send("XGROUP", ["CREATE", STREAM_KEY, GROUP_NAME, "$", "MKSTREAM"]);
     console.log(`[worker] consumer group '${GROUP_NAME}' created`);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes("BUSYGROUP")) throw err;
-    // Group already exists — expected
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("BUSYGROUP")) {
+      throw error;
+    }
   }
 }
 
-type XReadGroupEntry = [id: string, fields: string[]];
-
-type NormalizedEntry = {
-  id: string;
-  fields: Record<string, string>;
-};
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
+async function ack(redis: RedisClient, id: string): Promise<void> {
+  await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
 }
 
-function toFieldMap(raw: unknown): Record<string, string> {
-  if (!raw) return {};
+async function processEntry(
+  env: Bindings,
+  redis: RedisClient,
+  entry: StreamEntry
+): Promise<void> {
+  const { id, fields } = entry;
+  const body = fields.body;
 
-  if (Array.isArray(raw)) {
-    const out: Record<string, string> = {};
-    for (let i = 0; i + 1 < raw.length; i += 2) {
-      out[String(raw[i])] = String(raw[i + 1]);
-    }
-    return out;
+  if (!body) {
+    console.error(`[worker] message ${id}: missing body field`);
+    await ack(redis, id);
+    return;
   }
 
-  if (typeof raw === "object") {
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-      out[String(k)] = String(v ?? "");
-    }
-    return out;
-  }
+  let payload: Resp3Object | null = null;
 
-  return {};
+  try {
+    payload = JSON.parse(body) as Resp3Object;
+    await handleQueueMessage(env, payload as QueueMessage);
+    await ack(redis, id);
+  } catch (error) {
+    const retries = extractRetryCount(payload);
+    const canRetry = payload !== null && retries < MAX_RETRIES;
+
+    console.error(`[worker] message ${id} failed:`, error);
+
+    if (canRetry && payload) {
+      const retryPayload = {
+        ...payload,
+        __retryCount: retries + 1,
+      };
+
+      try {
+        await env.queue.send(retryPayload);
+        console.warn(`[worker] message ${id} requeued (${retries + 1}/${MAX_RETRIES})`);
+      } catch (requeueError) {
+        console.error(`[worker] message ${id} requeue failed:`, requeueError);
+      }
+    } else if (payload) {
+      console.error(`[worker] message ${id} reached max retries (${MAX_RETRIES})`);
+    }
+
+    try {
+      await ack(redis, id);
+    } catch (ackError) {
+      console.error(`[worker] message ${id} ack failed:`, ackError);
+    }
+  }
 }
 
-function normalizeXReadGroupResults(rawResults: unknown): NormalizedEntry[] {
-  const streamMap = asRecord(rawResults);
-  if (!streamMap) return [];
+async function readBatch(redis: RedisClient): Promise<StreamEntry[]> {
+  const raw = await redis.send("XREADGROUP", [
+    "GROUP",
+    GROUP_NAME,
+    CONSUMER_NAME,
+    "COUNT",
+    String(READ_COUNT),
+    "BLOCK",
+    String(BLOCK_MS),
+    "STREAMS",
+    STREAM_KEY,
+    ">",
+  ]);
 
-  const entries: NormalizedEntry[] = [];
-
-  for (const messagesRaw of Object.values(streamMap)) {
-    if (!Array.isArray(messagesRaw)) continue;
-
-    for (const message of messagesRaw as unknown[]) {
-      const obj = asRecord(message);
-      if (!obj) continue;
-
-      const idRaw = obj.id;
-      const id = typeof idRaw === "string" ? idRaw : String(idRaw ?? "");
-      if (!id) continue;
-
-      const fieldsRaw = obj.fields ?? obj.message ?? obj.value ?? obj;
-      const fields = toFieldMap(fieldsRaw);
-      entries.push({ id, fields });
-    }
-  }
-
-  return entries;
+  return parseXReadGroupResp3(raw);
 }
 
 async function run(): Promise<void> {
-  const { env, redis } = await buildEnv();
-  await ensureConsumerGroup(redis);
+  const { env, redis } = await buildContext();
+  await ensureGroup(redis);
 
   console.log(`[worker] started as ${CONSUMER_NAME}, reading from ${STREAM_KEY}`);
 
   while (true) {
-    let rawResults: unknown;
+    let batch: StreamEntry[];
+
     try {
-      rawResults = await redis.send("XREADGROUP", [
-        "GROUP", GROUP_NAME, CONSUMER_NAME,
-        "COUNT", "10",
-        "BLOCK", "5000",
-        "STREAMS", STREAM_KEY, ">",
-      ]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("NOGROUP")) {
+      batch = await readBatch(redis);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      if (message.includes("NOGROUP")) {
         try {
-          await ensureConsumerGroup(redis);
-        } catch (ensureErr) {
-          console.error("[worker] failed to recreate consumer group:", ensureErr);
+          await ensureGroup(redis);
+        } catch (groupError) {
+          console.error("[worker] failed to recreate consumer group:", groupError);
         }
       }
-      console.error("[worker] XREADGROUP error:", err);
+
+      console.error("[worker] XREADGROUP error:", error);
       await Bun.sleep(1000);
       continue;
     }
 
-    const entries = normalizeXReadGroupResults(rawResults);
-    if (entries.length === 0) continue;
+    if (batch.length === 0) {
+      continue;
+    }
 
-    for (const { id, fields } of entries) {
-      let parsed: QueueMessage | null = null;
-      let rawBodyObj: Record<string, unknown> | null = null;
-
-      try {
-        const bodyRaw = fields.body;
-        if (!bodyRaw) {
-          console.error(`[worker] message ${id}: missing body field`);
-          await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
-          continue;
-        }
-
-        rawBodyObj = JSON.parse(bodyRaw) as Record<string, unknown>;
-        parsed = rawBodyObj as QueueMessage;
-        await handleQueueMessage(env, parsed);
-        await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
-      } catch (err) {
-        console.error(`[worker] message ${id} failed:`, err);
-
-        const retries = Number(rawBodyObj?.__retryCount ?? 0);
-        const canRetry = Number.isFinite(retries) && retries < MAX_RETRIES;
-
-        if (rawBodyObj && canRetry) {
-          const retryPayload = {
-            ...rawBodyObj,
-            __retryCount: retries + 1,
-          };
-          try {
-            await env.queue.send(retryPayload);
-            console.warn(
-              `[worker] message ${id} requeued for retry ${retries + 1}/${MAX_RETRIES}`
-            );
-          } catch (requeueErr) {
-            console.error(`[worker] message ${id} failed to requeue:`, requeueErr);
-          }
-        } else if (rawBodyObj) {
-          console.error(
-            `[worker] message ${id} reached max retries (${MAX_RETRIES}), dropping from queue`
-          );
-        }
-
-        // Always ack the original message so failed items do not block the stream indefinitely.
-        try {
-          await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
-        } catch (ackErr) {
-          console.error(`[worker] message ${id} XACK after failure failed:`, ackErr);
-        }
-      }
+    for (const entry of batch) {
+      await processEntry(env, redis, entry);
     }
   }
 }
 
-run().catch((err) => {
-  console.error("[worker] fatal error:", err);
+run().catch((error) => {
+  console.error("[worker] fatal error:", error);
   process.exit(1);
 });
