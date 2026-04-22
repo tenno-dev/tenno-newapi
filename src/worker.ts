@@ -1,3 +1,4 @@
+import os from "os";
 import { RedisClient, SQL } from "bun";
 import type { Bindings, QueueMessage } from "./app/types";
 import { BunRedisKVStore } from "./adapters/kv/redis";
@@ -8,10 +9,11 @@ import { handleQueueMessage } from "./queue/consumer";
 
 const STREAM_KEY = "worldstate:translate";
 const GROUP_NAME = "workers";
-const CONSUMER_NAME = `consumer-${process.pid}`;
+const CONSUMER_NAME = process.env.HOSTNAME || os.hostname() || `worker-${process.pid}`;
 const MAX_RETRIES = Number(process.env.WORKER_MAX_RETRIES ?? "3");
 const BLOCK_MS = 5000;
 const READ_COUNT = 10;
+const CONCURRENCY_LIMIT = 5; // Process up to 5 messages in parallel per consumer
 
 type Resp3Object = Record<string, unknown>;
 
@@ -76,32 +78,54 @@ function toStringFields(value: unknown): Record<string, string> {
 }
 
 function parseXReadGroupResp3(raw: unknown): StreamEntry[] {
-  const messageLists: unknown[][] = [];
-
-  if (isMapLike(raw) || asObject(raw)) {
-    for (const [, value] of getEntries(raw)) {
-      if (Array.isArray(value)) {
-        messageLists.push(value);
-      }
-    }
-  } else if (Array.isArray(raw)) {
-    if (raw.length > 0 && raw.every((item) => isMessageTuple(item))) {
-      messageLists.push(raw as unknown[]);
-    } else {
-      for (const item of raw) {
-        if (Array.isArray(item) && item.length >= 2 && Array.isArray(item[1])) {
-          messageLists.push(item[1] as unknown[]);
-        }
-      }
-    }
-  } else {
-    return [];
-  }
+  if (!raw) return [];
 
   const entries: StreamEntry[] = [];
+  const messageLists: unknown[][] = [];
 
+  // 1. Normalize the top-level structure (Map/Object per stream vs Array per stream)
+  if (isMapLike(raw) || asObject(raw)) {
+    for (const [, value] of getEntries(raw)) {
+      if (Array.isArray(value)) messageLists.push(value);
+    }
+  } else if (Array.isArray(raw)) {
+    // Basic array of [streamname, [[id, [field, val, ...]], ...]]
+    for (const item of raw) {
+      if (Array.isArray(item) && item.length >= 2 && Array.isArray(item[1])) {
+        messageLists.push(item[1] as unknown[]);
+      } else if (isMessageTuple(item)) {
+        // Flat array of messages
+        messageLists.push([item]);
+      }
+    }
+  }
+
+  // 2. Parse individual message entries
   for (const streamMessages of messageLists) {
     for (const message of streamMessages) {
+      if (!message) continue;
+
+      // Handle Map/Object style message
+      const msgObj = isMapLike(message) || asObject(message);
+      if (msgObj) {
+        const idRaw = getValue(msgObj, "id");
+        const id = String(idRaw ?? "");
+        if (!id) continue;
+
+        const rawFields = getValue(msgObj, "fields") || getValue(msgObj, "message") || msgObj;
+        const fields = toStringFields(rawFields);
+        
+        // If body was a top-level field in RESP3 Map
+        const bodyRaw = getValue(msgObj, "body");
+        if (!fields.body && typeof bodyRaw === "string") {
+          fields.body = bodyRaw;
+        }
+
+        entries.push({ id, fields });
+        continue;
+      }
+
+      // Handle Tuple/Array style message: [id, [field1, val1, ...]]
       if (Array.isArray(message) && message.length >= 2) {
         const id = String(message[0] ?? "");
         if (!id) continue;
@@ -113,31 +137,7 @@ function parseXReadGroupResp3(raw: unknown): StreamEntry[] {
         }
 
         entries.push({ id, fields });
-        continue;
       }
-
-      const msg = isMapLike(message) || asObject(message);
-      if (!msg) {
-        continue;
-      }
-
-      const idRaw = getValue(msg, "id");
-      const id = typeof idRaw === "string" ? idRaw : String(idRaw ?? "");
-      if (!id) continue;
-
-      const fields = toStringFields(
-        getValue(msg, "fields") ??
-          getValue(msg, "message") ??
-          getValue(msg, "value") ??
-          msg
-      );
-
-      const bodyRaw = getValue(msg, "body");
-      if (!fields.body && typeof bodyRaw === "string") {
-        fields.body = bodyRaw;
-      }
-
-      entries.push({ id, fields });
     }
   }
 
@@ -255,7 +255,10 @@ async function processEntry(
   }
 }
 
-async function readBatch(redis: RedisClient): Promise<StreamEntry[]> {
+async function readBatch(
+  redis: RedisClient,
+  id: string = ">"
+): Promise<{ raw: unknown; entries: StreamEntry[] }> {
   const raw = await redis.send("XREADGROUP", [
     "GROUP",
     GROUP_NAME,
@@ -263,26 +266,55 @@ async function readBatch(redis: RedisClient): Promise<StreamEntry[]> {
     "COUNT",
     String(READ_COUNT),
     "BLOCK",
-    String(BLOCK_MS),
+    id === ">" ? String(BLOCK_MS) : "0",
     "STREAMS",
     STREAM_KEY,
-    ">",
+    id,
   ]);
 
-  return parseXReadGroupResp3(raw);
+  return { raw, entries: parseXReadGroupResp3(raw) };
+}
+
+/**
+ * Startup recovery: Process messages already assigned to this consumer but not ACKed.
+ */
+async function startupRecovery(env: Bindings, redis: RedisClient): Promise<void> {
+  console.log(`[worker] starting recovery phase for ${CONSUMER_NAME}...`);
+  let totalRecovered = 0;
+
+  while (totalRecovered < 1000) { // Safety cap
+    const { entries } = await readBatch(redis, "0");
+    if (entries.length === 0) break;
+
+    console.log(`[worker] recovering ${entries.length} pending messages`);
+    for (const entry of entries) {
+      await processEntry(env, redis, entry);
+      totalRecovered++;
+    }
+  }
+
+  if (totalRecovered > 0) {
+    console.log(`[worker] recovery phase complete: ${totalRecovered} messages processed`);
+  } else {
+    console.log("[worker] no pending messages found");
+  }
 }
 
 async function run(): Promise<void> {
   const { env, redis } = await buildContext();
   await ensureGroup(redis);
 
+  // 1. Recover pending messages
+  await startupRecovery(env, redis);
+
   console.log(`[worker] started as ${CONSUMER_NAME}, reading from ${STREAM_KEY}`);
 
+  // 2. Main loop
   while (true) {
-    let batch: StreamEntry[];
+    let batch: { raw: unknown; entries: StreamEntry[] };
 
     try {
-      batch = await readBatch(redis);
+      batch = await readBatch(redis, ">");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
@@ -299,13 +331,42 @@ async function run(): Promise<void> {
       continue;
     }
 
-    if (batch.length === 0) {
+    if (batch.entries.length === 0) {
+      const unknownIds = extractPotentialIds(batch.raw);
+      if (unknownIds.length > 0) {
+        console.warn(
+          `[worker] unknown XREADGROUP shape; acking ${unknownIds.length} ids to avoid pending buildup`
+        );
+        for (const id of unknownIds) {
+          try {
+            await ack(redis, id);
+          } catch (ackError) {
+            console.error(`[worker] fallback ack failed for ${id}:`, ackError);
+          }
+        }
+      }
       continue;
     }
 
-    for (const entry of batch) {
-      await processEntry(env, redis, entry);
+    // Process batch in parallel with a concurrency limit
+    const pool = [...batch.entries];
+    const workers = [];
+
+    async function worker() {
+      while (pool.length > 0) {
+        const entry = pool.shift();
+        if (entry) {
+          await processEntry(env, redis, entry);
+        }
+      }
     }
+
+    // Spawn up to CONCURRENCY_LIMIT workers for this batch
+    for (let i = 0; i < Math.min(CONCURRENCY_LIMIT, batch.entries.length); i++) {
+      workers.push(worker());
+    }
+
+    await Promise.all(workers);
   }
 }
 
