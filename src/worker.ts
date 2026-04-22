@@ -20,6 +20,10 @@ type StreamEntry = {
   fields: Record<string, string>;
 };
 
+function isMapLike(value: unknown): value is Map<unknown, unknown> {
+  return value instanceof Map;
+}
+
 function isMessageTuple(value: unknown): value is [unknown, unknown] {
   return (
     Array.isArray(value) &&
@@ -44,12 +48,28 @@ function asObject(value: unknown): Resp3Object | null {
   return value as Resp3Object;
 }
 
-function toStringFields(value: unknown): Record<string, string> {
-  const obj = asObject(value);
-  if (!obj) return {};
+function getEntries(value: unknown): Array<[string, unknown]> {
+  if (isMapLike(value)) {
+    return Array.from(value.entries()).map(([k, v]) => [String(k), v]);
+  }
 
+  const obj = asObject(value);
+  if (!obj) return [];
+  return Object.entries(obj);
+}
+
+function getValue(value: unknown, key: string): unknown {
+  if (isMapLike(value)) {
+    return value.get(key);
+  }
+
+  const obj = asObject(value);
+  return obj ? obj[key] : undefined;
+}
+
+function toStringFields(value: unknown): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [key, fieldValue] of Object.entries(obj)) {
+  for (const [key, fieldValue] of getEntries(value)) {
     out[key] = String(fieldValue ?? "");
   }
   return out;
@@ -58,9 +78,8 @@ function toStringFields(value: unknown): Record<string, string> {
 function parseXReadGroupResp3(raw: unknown): StreamEntry[] {
   const messageLists: unknown[][] = [];
 
-  const streamMap = asObject(raw);
-  if (streamMap) {
-    for (const value of Object.values(streamMap)) {
+  if (isMapLike(raw) || asObject(raw)) {
+    for (const [, value] of getEntries(raw)) {
       if (Array.isArray(value)) {
         messageLists.push(value);
       }
@@ -97,15 +116,25 @@ function parseXReadGroupResp3(raw: unknown): StreamEntry[] {
         continue;
       }
 
-      const msg = asObject(message);
-      if (!msg) continue;
+      const msg = isMapLike(message) || asObject(message);
+      if (!msg) {
+        continue;
+      }
 
-      const id = typeof msg.id === "string" ? msg.id : String(msg.id ?? "");
+      const idRaw = getValue(msg, "id");
+      const id = typeof idRaw === "string" ? idRaw : String(idRaw ?? "");
       if (!id) continue;
 
-      const fields = toStringFields(msg.fields ?? msg.message ?? msg.value ?? msg);
-      if (!fields.body && typeof msg.body === "string") {
-        fields.body = msg.body;
+      const fields = toStringFields(
+        getValue(msg, "fields") ??
+          getValue(msg, "message") ??
+          getValue(msg, "value") ??
+          msg
+      );
+
+      const bodyRaw = getValue(msg, "body");
+      if (!fields.body && typeof bodyRaw === "string") {
+        fields.body = bodyRaw;
       }
 
       entries.push({ id, fields });
