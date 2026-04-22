@@ -1,36 +1,15 @@
-import { readFile, writeFile, mkdir, stat } from "fs/promises";
-import { existsSync } from "fs";
-import * as path from "path";
+import * as path from "node:path";
 import type { BlobStore, BlobObject, BlobListResult } from "../../app/types";
 
 class LocalBlobObject implements BlobObject {
   constructor(private readonly filePath: string) {}
 
   async text(): Promise<string> {
-    return readFile(this.filePath, "utf8");
+    return Bun.file(this.filePath).text();
   }
 
   async json<T = unknown>(): Promise<T> {
-    const text = await this.text();
-    return JSON.parse(text) as T;
-  }
-}
-
-async function collectFiles(dir: string, results: string[]): Promise<void> {
-  let entries;
-  try {
-    const { readdir } = await import("fs/promises");
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await collectFiles(full, results);
-    } else {
-      results.push(full);
-    }
+    return Bun.file(this.filePath).json();
   }
 }
 
@@ -39,7 +18,8 @@ export class LocalBlobStore implements BlobStore {
 
   async get(key: string): Promise<BlobObject | null> {
     const filePath = path.join(this.basePath, key);
-    if (!existsSync(filePath)) return null;
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) return null;
     return new LocalBlobObject(filePath);
   }
 
@@ -49,8 +29,9 @@ export class LocalBlobStore implements BlobStore {
     _opts?: { httpMetadata?: { contentType?: string } }
   ): Promise<void> {
     const filePath = path.join(this.basePath, key);
-    await mkdir(path.dirname(filePath), { recursive: true });
-    await writeFile(filePath, value, "utf8");
+    // Bun.write natively creates parent directories as needed. 
+    // No explicit mkdir(dirname) call required.
+    await Bun.write(filePath, value);
   }
 
   async list(
@@ -60,30 +41,29 @@ export class LocalBlobStore implements BlobStore {
     const prefix = opts.prefix ?? "";
     const cursorOffset = opts.cursor ? parseInt(opts.cursor, 10) : 0;
 
+    const glob = new Bun.Glob("**/*");
     const allFiles: string[] = [];
-    await collectFiles(this.basePath, allFiles);
+    
+    for await (const file of glob.scan({ cwd: this.basePath })) {
+      const normalizedPath = file.replace(/\\/g, "/");
+      if (normalizedPath.startsWith(prefix)) {
+        allFiles.push(normalizedPath);
+      }
+    }
 
-    const relFiles = allFiles
-      .map((f) => path.relative(this.basePath, f).replace(/\\/g, "/"))
-      .filter((f) => f.startsWith(prefix))
-      .sort();
+    allFiles.sort();
 
-    const page = relFiles.slice(cursorOffset, cursorOffset + limit);
+    const page = allFiles.slice(cursorOffset, cursorOffset + limit);
 
     const objects = await Promise.all(
       page.map(async (key) => {
-        const filePath = path.join(this.basePath, key);
-        try {
-          const s = await stat(filePath);
-          return { key, size: s.size };
-        } catch {
-          return { key, size: 0 };
-        }
+        const file = Bun.file(path.join(this.basePath, key));
+        return { key, size: file.size };
       })
     );
 
     const nextOffset = cursorOffset + limit;
-    const hasMore = nextOffset < relFiles.length;
+    const hasMore = nextOffset < allFiles.length;
 
     return {
       objects,

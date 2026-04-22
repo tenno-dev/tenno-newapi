@@ -1,4 +1,4 @@
-import os from "os";
+// Pure Bun - No Node.js legacy modules used
 import { RedisClient, SQL } from "bun";
 import type { Bindings, QueueMessage } from "./app/types";
 import { BunRedisKVStore } from "./adapters/kv/redis";
@@ -9,8 +9,9 @@ import { handleQueueMessage } from "./queue/consumer";
 
 const STREAM_KEY = "worldstate:translate";
 const GROUP_NAME = "workers";
-const CONSUMER_NAME = process.env.HOSTNAME || os.hostname() || `worker-${process.pid}`;
-const MAX_RETRIES = Number(process.env.WORKER_MAX_RETRIES ?? "3");
+// Use Bun.env for a pure, unified identity (standard in containerized environments)
+const CONSUMER_NAME = Bun.env.HOSTNAME || Bun.env.USER || Bun.env.USERNAME || "worker";
+const MAX_RETRIES = Number(Bun.env.WORKER_MAX_RETRIES ?? "3");
 const BLOCK_MS = 5000;
 const READ_COUNT = 10;
 const CONCURRENCY_LIMIT = 5; // Process up to 5 messages in parallel per consumer
@@ -42,7 +43,7 @@ function isStreamId(value: unknown): value is string {
 }
 
 function requireEnv(name: string): string {
-  const value = process.env[name];
+  const value = Bun.env[name];
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
@@ -195,9 +196,9 @@ function extractPotentialIds(raw: unknown): string[] {
 }
 
 async function buildContext(): Promise<{ env: Bindings; redis: RedisClient }> {
-  const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
+  const redisUrl = Bun.env.REDIS_URL ?? "redis://localhost:6379";
   const databaseUrl = requireEnv("DATABASE_URL");
-  const blobBasePath = process.env.BLOB_BASE_PATH ?? "/app/blob";
+  const blobBasePath = Bun.env.BLOB_BASE_PATH ?? "/app/blob";
 
   const redis = new RedisClient(redisUrl, {
     enableOfflineQueue: false,
@@ -214,17 +215,17 @@ async function buildContext(): Promise<{ env: Bindings; redis: RedisClient }> {
     sql: new BunSQLClient(sql),
     queue: new BunRedisQueueClient(redis),
 
-    APP_ENV: process.env.APP_ENV ?? "production",
+    APP_ENV: Bun.env.APP_ENV ?? "production",
     WORLDSTATE_SOURCE_URL: requireEnv("WORLDSTATE_SOURCE_URL"),
-    WORLDSTATE_SOURCE_TOKEN: process.env.WORLDSTATE_SOURCE_TOKEN ?? "",
-    VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY ?? "",
-    VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY ?? "",
-    PUSH_ALLOWED_ORIGINS: process.env.PUSH_ALLOWED_ORIGINS ?? "",
-    PUSH_SUBSCRIBE_RATE_LIMIT: process.env.PUSH_SUBSCRIBE_RATE_LIMIT ?? "30",
-    PUSH_SUBSCRIBE_WINDOW_SECONDS: process.env.PUSH_SUBSCRIBE_WINDOW_SECONDS ?? "60",
-    PUSH_ADMIN_TOKEN: process.env.PUSH_ADMIN_TOKEN ?? "",
-    DEPLOY_TRIGGER_TOKEN: process.env.DEPLOY_TRIGGER_TOKEN ?? "",
-    CORS_ALLOWED_ORIGINS: process.env.CORS_ALLOWED_ORIGINS ?? "",
+    WORLDSTATE_SOURCE_TOKEN: Bun.env.WORLDSTATE_SOURCE_TOKEN ?? "",
+    VAPID_PUBLIC_KEY: Bun.env.VAPID_PUBLIC_KEY ?? "",
+    VAPID_PRIVATE_KEY: Bun.env.VAPID_PRIVATE_KEY ?? "",
+    PUSH_ALLOWED_ORIGINS: Bun.env.PUSH_ALLOWED_ORIGINS ?? "",
+    PUSH_SUBSCRIBE_RATE_LIMIT: Bun.env.PUSH_SUBSCRIBE_RATE_LIMIT ?? "30",
+    PUSH_SUBSCRIBE_WINDOW_SECONDS: Bun.env.PUSH_SUBSCRIBE_WINDOW_SECONDS ?? "60",
+    PUSH_ADMIN_TOKEN: Bun.env.PUSH_ADMIN_TOKEN ?? "",
+    DEPLOY_TRIGGER_TOKEN: Bun.env.DEPLOY_TRIGGER_TOKEN ?? "",
+    CORS_ALLOWED_ORIGINS: Bun.env.CORS_ALLOWED_ORIGINS ?? "",
   };
 
   return { env, redis };
@@ -416,5 +417,5 @@ async function run(): Promise<void> {
 
 run().catch((error) => {
   console.error("[worker] fatal error:", error);
-  process.exit(1);
+  process.exit(1); // process.exit is standard for CLI apps even in Bun
 });
