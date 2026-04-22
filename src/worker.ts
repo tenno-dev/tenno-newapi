@@ -15,6 +15,8 @@ const BLOCK_MS = 5000;
 const READ_COUNT = 10;
 const CONCURRENCY_LIMIT = 5; // Process up to 5 messages in parallel per consumer
 
+const STREAM_ID_PATTERN = /^\d+-\d+$/;
+
 type Resp3Object = Record<string, unknown>;
 
 type StreamEntry = {
@@ -33,6 +35,10 @@ function isMessageTuple(value: unknown): value is [unknown, unknown] {
     (typeof value[0] === "string" || typeof value[0] === "number") &&
     Array.isArray(value[1])
   );
+}
+
+function isStreamId(value: unknown): value is string {
+  return typeof value === "string" && STREAM_ID_PATTERN.test(value);
 }
 
 function requireEnv(name: string): string {
@@ -148,6 +154,44 @@ function extractRetryCount(payload: Resp3Object | null): number {
   const value = Number(payload?.__retryCount ?? 0);
   if (!Number.isFinite(value) || value < 0) return 0;
   return Math.floor(value);
+}
+
+function collectPotentialIds(raw: unknown, out: Set<string>): void {
+  if (Array.isArray(raw)) {
+    if (raw.length >= 2 && isStreamId(raw[0])) {
+      out.add(raw[0]);
+    }
+    for (const item of raw) {
+      collectPotentialIds(item, out);
+    }
+    return;
+  }
+
+  if (isMapLike(raw)) {
+    for (const [key, value] of raw.entries()) {
+      if (isStreamId(key)) {
+        out.add(String(key));
+      }
+      collectPotentialIds(value, out);
+    }
+    return;
+  }
+
+  const obj = asObject(raw);
+  if (!obj) return;
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (isStreamId(key)) {
+      out.add(key);
+    }
+    collectPotentialIds(value, out);
+  }
+}
+
+function extractPotentialIds(raw: unknown): string[] {
+  const ids = new Set<string>();
+  collectPotentialIds(raw, ids);
+  return Array.from(ids);
 }
 
 async function buildContext(): Promise<{ env: Bindings; redis: RedisClient }> {
