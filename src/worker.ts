@@ -15,6 +15,7 @@ function requireEnv(name: string): string {
 const STREAM_KEY = "worldstate:translate";
 const GROUP_NAME = "workers";
 const CONSUMER_NAME = `consumer-${process.pid}`;
+const MAX_RETRIES = Number(process.env.WORKER_MAX_RETRIES ?? "3");
 
 async function buildEnv(): Promise<{ env: Bindings; redis: RedisClient }> {
   const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -69,6 +70,13 @@ type NormalizedEntry = {
   fields: Record<string, string>;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
 function toFieldMap(raw: unknown): Record<string, string> {
   if (!raw) return {};
 
@@ -92,49 +100,25 @@ function toFieldMap(raw: unknown): Record<string, string> {
 }
 
 function normalizeXReadGroupResults(rawResults: unknown): NormalizedEntry[] {
-  if (!rawResults) return [];
-
-  // RESP3: Bun's Redis client negotiates RESP3 by default. Redis Map types are
-  // returned as plain JS objects ({ streamname: entries[] }) instead of the
-  // RESP2 nested-array format ([[streamname, entries[]], ...]). Convert to the
-  // array format so the rest of the parsing logic works for both protocols.
-  const toProcess: unknown =
-    !Array.isArray(rawResults) && typeof rawResults === "object"
-      ? Object.entries(rawResults as Record<string, unknown>)
-      : rawResults;
-
-  if (!Array.isArray(toProcess) || toProcess.length === 0) return [];
+  const streamMap = asRecord(rawResults);
+  if (!streamMap) return [];
 
   const entries: NormalizedEntry[] = [];
 
-  for (const streamPart of toProcess as unknown[]) {
-    let messagesRaw: unknown = null;
-
-    if (Array.isArray(streamPart) && streamPart.length >= 2) {
-      // RESP2-like: [stream, [[id, [field, value, ...]], ...]]
-      messagesRaw = streamPart[1];
-    } else if (streamPart && typeof streamPart === "object") {
-      // Some RESP3 decoders may use object keys such as messages/value
-      const obj = streamPart as Record<string, unknown>;
-      messagesRaw = obj.messages ?? obj.value ?? null;
-    }
-
+  for (const messagesRaw of Object.values(streamMap)) {
     if (!Array.isArray(messagesRaw)) continue;
 
     for (const message of messagesRaw as unknown[]) {
-      if (Array.isArray(message) && message.length >= 2) {
-        const id = String(message[0]);
-        const fields = toFieldMap(message[1]);
-        entries.push({ id, fields });
-        continue;
-      }
+      const obj = asRecord(message);
+      if (!obj) continue;
 
-      if (message && typeof message === "object") {
-        const obj = message as Record<string, unknown>;
-        const id = typeof obj.id === "string" ? obj.id : String(obj.id ?? "");
-        const fields = toFieldMap(obj.fields ?? obj.message ?? obj.value ?? obj);
-        if (id) entries.push({ id, fields });
-      }
+      const idRaw = obj.id;
+      const id = typeof idRaw === "string" ? idRaw : String(idRaw ?? "");
+      if (!id) continue;
+
+      const fieldsRaw = obj.fields ?? obj.message ?? obj.value ?? obj;
+      const fields = toFieldMap(fieldsRaw);
+      entries.push({ id, fields });
     }
   }
 
@@ -157,6 +141,14 @@ async function run(): Promise<void> {
         "STREAMS", STREAM_KEY, ">",
       ]);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("NOGROUP")) {
+        try {
+          await ensureConsumerGroup(redis);
+        } catch (ensureErr) {
+          console.error("[worker] failed to recreate consumer group:", ensureErr);
+        }
+      }
       console.error("[worker] XREADGROUP error:", err);
       await Bun.sleep(1000);
       continue;
@@ -167,6 +159,7 @@ async function run(): Promise<void> {
 
     for (const { id, fields } of entries) {
       let parsed: QueueMessage | null = null;
+      let rawBodyObj: Record<string, unknown> | null = null;
 
       try {
         const bodyRaw = fields.body;
@@ -176,12 +169,41 @@ async function run(): Promise<void> {
           continue;
         }
 
-        parsed = JSON.parse(bodyRaw) as QueueMessage;
+        rawBodyObj = JSON.parse(bodyRaw) as Record<string, unknown>;
+        parsed = rawBodyObj as QueueMessage;
         await handleQueueMessage(env, parsed);
         await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
       } catch (err) {
         console.error(`[worker] message ${id} failed:`, err);
-        // Leave in pending for retry; do not XACK
+
+        const retries = Number(rawBodyObj?.__retryCount ?? 0);
+        const canRetry = Number.isFinite(retries) && retries < MAX_RETRIES;
+
+        if (rawBodyObj && canRetry) {
+          const retryPayload = {
+            ...rawBodyObj,
+            __retryCount: retries + 1,
+          };
+          try {
+            await env.queue.send(retryPayload);
+            console.warn(
+              `[worker] message ${id} requeued for retry ${retries + 1}/${MAX_RETRIES}`
+            );
+          } catch (requeueErr) {
+            console.error(`[worker] message ${id} failed to requeue:`, requeueErr);
+          }
+        } else if (rawBodyObj) {
+          console.error(
+            `[worker] message ${id} reached max retries (${MAX_RETRIES}), dropping from queue`
+          );
+        }
+
+        // Always ack the original message so failed items do not block the stream indefinitely.
+        try {
+          await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
+        } catch (ackErr) {
+          console.error(`[worker] message ${id} XACK after failure failed:`, ackErr);
+        }
       }
     }
   }
