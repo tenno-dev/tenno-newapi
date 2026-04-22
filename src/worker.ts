@@ -20,6 +20,15 @@ type StreamEntry = {
   fields: Record<string, string>;
 };
 
+function isMessageTuple(value: unknown): value is [unknown, unknown] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    (typeof value[0] === "string" || typeof value[0] === "number") &&
+    Array.isArray(value[1])
+  );
+}
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -47,28 +56,33 @@ function toStringFields(value: unknown): Record<string, string> {
 }
 
 function parseXReadGroupResp3(raw: unknown): StreamEntry[] {
-  const streamParts: unknown[] = [];
+  const messageLists: unknown[][] = [];
 
   const streamMap = asObject(raw);
   if (streamMap) {
-    streamParts.push(...Object.values(streamMap));
+    for (const value of Object.values(streamMap)) {
+      if (Array.isArray(value)) {
+        messageLists.push(value);
+      }
+    }
   } else if (Array.isArray(raw)) {
-    streamParts.push(...raw);
+    if (raw.length > 0 && raw.every((item) => isMessageTuple(item))) {
+      messageLists.push(raw as unknown[]);
+    } else {
+      for (const item of raw) {
+        if (Array.isArray(item) && item.length >= 2 && Array.isArray(item[1])) {
+          messageLists.push(item[1] as unknown[]);
+        }
+      }
+    }
   } else {
     return [];
   }
 
   const entries: StreamEntry[] = [];
 
-  for (const part of streamParts) {
-    const streamMessages =
-      Array.isArray(part) && part.length >= 2 && Array.isArray(part[1])
-        ? part[1]
-        : part;
-
-    if (!Array.isArray(streamMessages)) continue;
-
-    for (const message of streamMessages as unknown[]) {
+  for (const streamMessages of messageLists) {
+    for (const message of streamMessages) {
       if (Array.isArray(message) && message.length >= 2) {
         const id = String(message[0] ?? "");
         if (!id) continue;
@@ -156,7 +170,10 @@ async function ensureGroup(redis: RedisClient): Promise<void> {
 }
 
 async function ack(redis: RedisClient, id: string): Promise<void> {
-  await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
+  const result = await redis.send("XACK", [STREAM_KEY, GROUP_NAME, id]);
+  if (typeof result === "number" && result === 0) {
+    console.warn(`[worker] XACK no-op for id ${id}`);
+  }
 }
 
 async function processEntry(
