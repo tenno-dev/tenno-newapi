@@ -47,15 +47,42 @@ function toStringFields(value: unknown): Record<string, string> {
 }
 
 function parseXReadGroupResp3(raw: unknown): StreamEntry[] {
+  const streamParts: unknown[] = [];
+
   const streamMap = asObject(raw);
-  if (!streamMap) return [];
+  if (streamMap) {
+    streamParts.push(...Object.values(streamMap));
+  } else if (Array.isArray(raw)) {
+    streamParts.push(...raw);
+  } else {
+    return [];
+  }
 
   const entries: StreamEntry[] = [];
 
-  for (const streamMessages of Object.values(streamMap)) {
+  for (const part of streamParts) {
+    const streamMessages =
+      Array.isArray(part) && part.length >= 2 && Array.isArray(part[1])
+        ? part[1]
+        : part;
+
     if (!Array.isArray(streamMessages)) continue;
 
     for (const message of streamMessages as unknown[]) {
+      if (Array.isArray(message) && message.length >= 2) {
+        const id = String(message[0] ?? "");
+        if (!id) continue;
+
+        const fieldTuples = Array.isArray(message[1]) ? message[1] : [];
+        const fields: Record<string, string> = {};
+        for (let i = 0; i + 1 < fieldTuples.length; i += 2) {
+          fields[String(fieldTuples[i])] = String(fieldTuples[i + 1] ?? "");
+        }
+
+        entries.push({ id, fields });
+        continue;
+      }
+
       const msg = asObject(message);
       if (!msg) continue;
 
