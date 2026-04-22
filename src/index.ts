@@ -3,6 +3,7 @@ import { cors } from "@elysiajs/cors";
 import { cron } from "@elysiajs/cron";
 import { openapi } from "@elysiajs/openapi";
 import { logger } from "@bogeychan/elysia-logger";
+import { etag } from "@bogeychan/elysia-etag";
 import { RedisClient, SQL } from "bun";
 import type { Bindings } from "./app/types";
 import { BunRedisKVStore } from "./adapters/kv/redis";
@@ -69,8 +70,9 @@ const port = Number(Bun.env.PORT ?? 3000);
 
 new Elysia()
   .use(logger())
+  .use(etag())
   .onAfterHandle(async ({ query, request, set, response }) => {
-    // 1. Logic for Pretty JSON (moved up for priority)
+    // 1. Logic for Pretty JSON
     if (query.pretty === "true" && response && typeof response === "object" && !(response instanceof Uint8Array)) {
       const prettyBody = JSON.stringify(response, null, 2);
       set.headers["content-type"] = "application/json; charset=utf-8";
@@ -89,18 +91,7 @@ new Elysia()
     const text = isJson ? JSON.stringify(body) : String(body);
     if (text.length === 0) return response;
 
-    // 2. ETag Implementation
-    const hasher = new Bun.CryptoHasher("sha1");
-    hasher.update(text);
-    const etagValue = `W/"${hasher.digest("hex").slice(0, 27)}"`;
-    const ifNoneMatch = request.headers.get("if-none-match");
-    if (ifNoneMatch === etagValue) {
-      set.status = 304;
-      return null;
-    }
-    set.headers["etag"] = etagValue;
-
-    // 3. Gzip Compression (Native Bun)
+    // 2. Gzip Compression (Native Bun) - Keeping manual as it's more stable for now
     const acceptEncoding = request.headers.get("accept-encoding") ?? "";
     if (acceptEncoding.includes("gzip") && text.length > 1024) {
       const compressed = Bun.gzipSync(new TextEncoder().encode(text));

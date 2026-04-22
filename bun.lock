@@ -5,6 +5,7 @@
     "": {
       "name": "tennodev-api",
       "dependencies": {
+        "@bogeychan/elysia-etag": "^0.1.0",
         "@bogeychan/elysia-logger": "^0.1.10",
         "@elysiajs/bearer": "^1.4.3",
         "@elysiajs/cors": "^1.2.0",
@@ -21,6 +22,8 @@
     },
   },
   "packages": {
+    "@bogeychan/elysia-etag": ["@bogeychan/elysia-etag@0.1.0", "", { "peerDependencies": { "elysia": ">= 1.2.10" } }, "sha512-wKRt7I1AYew+Xem5dSSIIuRwr/MRpWa5qWC9CQIq5NKYVI0TvZciWQArKG/MMJ0ibfyFouKETTernU8vY+bYEQ=="],
+
     "@bogeychan/elysia-logger": ["@bogeychan/elysia-logger@0.1.10", "", { "peerDependencies": { "elysia": ">= 1.2.10", "pino": ">= 9.6.0" } }, "sha512-wFp3KUCNIkCV4zcbo70gifHH99ch7e4LNrP5Xa5e2MRO2MDyPgM92SWQmrzkng6PsSZk13+UKJskGNQ+ZuDZkQ=="],
 
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],

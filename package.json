@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@bogeychan/elysia-etag": "^0.1.0",
     "@bogeychan/elysia-logger": "^0.1.10",
     "@elysiajs/bearer": "^1.4.3",
     "@elysiajs/cors": "^1.2.0",
