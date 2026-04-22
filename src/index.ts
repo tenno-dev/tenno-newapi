@@ -3,8 +3,6 @@ import { cors } from "@elysiajs/cors";
 import { cron } from "@elysiajs/cron";
 import { openapi } from "@elysiajs/openapi";
 import { logger } from "@bogeychan/elysia-logger";
-import { etag } from "@bogeychan/elysia-etag";
-import compress from "elysia-compress";
 import { RedisClient, SQL } from "bun";
 import type { Bindings } from "./app/types";
 import { BunRedisKVStore } from "./adapters/kv/redis";
@@ -71,15 +69,51 @@ const port = Number(Bun.env.PORT ?? 3000);
 
 new Elysia()
   .use(logger())
-  .use(compress())
-  .use(etag())
-  .onAfterHandle(({ query, response }) => {
-    // Universal "Pretty JSON" feature via query parameter
-    if (query.pretty === "true" && response && typeof response === "object") {
-      return new Response(JSON.stringify(response, null, 2), {
-        headers: { "Content-Type": "application/json" },
+  .onAfterHandle(async ({ query, request, set, response }) => {
+    // 1. Logic for Pretty JSON (moved up for priority)
+    if (query.pretty === "true" && response && typeof response === "object" && !(response instanceof Uint8Array)) {
+      const prettyBody = JSON.stringify(response, null, 2);
+      set.headers["content-type"] = "application/json; charset=utf-8";
+      return new Response(prettyBody, { 
+        headers: set.headers as Record<string, string>, 
+        status: typeof set.status === "number" ? set.status : 200 
       });
     }
+
+    if (response == null || response instanceof ReadableStream || response instanceof Response || response instanceof Blob) {
+      return response;
+    }
+
+    let body = response;
+    const isJson = typeof body === "object" && !(body instanceof Uint8Array);
+    const text = isJson ? JSON.stringify(body) : String(body);
+    if (text.length === 0) return response;
+
+    // 2. ETag Implementation
+    const hasher = new Bun.CryptoHasher("sha1");
+    hasher.update(text);
+    const etagValue = `W/"${hasher.digest("hex").slice(0, 27)}"`;
+    const ifNoneMatch = request.headers.get("if-none-match");
+    if (ifNoneMatch === etagValue) {
+      set.status = 304;
+      return null;
+    }
+    set.headers["etag"] = etagValue;
+
+    // 3. Gzip Compression (Native Bun)
+    const acceptEncoding = request.headers.get("accept-encoding") ?? "";
+    if (acceptEncoding.includes("gzip") && text.length > 1024) {
+      const compressed = Bun.gzipSync(new TextEncoder().encode(text));
+      set.headers["content-encoding"] = "gzip";
+      set.headers["vary"] = "Accept-Encoding";
+      set.headers["content-type"] = isJson ? "application/json; charset=utf-8" : "text/plain; charset=utf-8";
+      return new Response(compressed, { 
+        headers: set.headers as Record<string, string>, 
+        status: typeof set.status === "number" ? set.status : 200 
+      });
+    }
+
+    return response;
   })
   .use(
     openapi({
