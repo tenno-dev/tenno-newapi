@@ -80,24 +80,55 @@ export async function fetchWorldState(url?: string): Promise<RawWorldState> {
   const targetUrl = url ?? DEFAULT_WORLDSTATE_URL;
   const init = buildWorldStateRequestInit();
 
-  const response = await fetch(targetUrl, init);
+  let lastError: Error | null = null;
+  const maxRetries = 3;
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch worldstate: HTTP ${response.status} from ${targetUrl}`);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(targetUrl, init);
+
+      if (response.ok) {
+        const text = await response.text();
+        let data: unknown;
+
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(`Failed to parse worldstate JSON from ${targetUrl}`);
+        }
+
+        if (!hasKnownWorldStateShape(data)) {
+          throw new Error(`Unexpected worldstate shape from ${targetUrl}`);
+        }
+
+        return data;
+      }
+
+      // Only retry on 5xx errors (like 502 Bad Gateway)
+      if (response.status >= 500) {
+        console.warn(`[fetch] Attempt ${attempt + 1} failed: HTTP ${response.status} from ${targetUrl}`);
+      } else {
+        throw new Error(`Failed to fetch worldstate: HTTP ${response.status} from ${targetUrl}`);
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      
+      // If it's a parse error or 4xx error (thrown above), don't retry
+      if (lastError.message.includes("HTTP") && !lastError.message.includes("HTTP 5")) {
+          throw lastError;
+      }
+      if (lastError.message.includes("JSON") || lastError.message.includes("shape")) {
+          throw lastError;
+      }
+
+      console.warn(`[fetch] Attempt ${attempt + 1} error: ${lastError.message}`);
+    }
+
+    if (attempt < maxRetries) {
+      const delay = Math.pow(2, attempt) * 1000;
+      await Bun.sleep(delay);
+    }
   }
 
-  const text = await response.text();
-  let data: unknown;
-
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(`Failed to parse worldstate JSON from ${targetUrl}`);
-  }
-
-  if (!hasKnownWorldStateShape(data)) {
-    throw new Error(`Unexpected worldstate shape from ${targetUrl}`);
-  }
-
-  return data;
+  throw lastError ?? new Error(`Failed to fetch worldstate after ${maxRetries} retries`);
 }

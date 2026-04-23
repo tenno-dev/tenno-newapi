@@ -36,6 +36,10 @@ export async function executeWorldStatePush(
   }
 
   const worldState = await fetchWorldState(worldStateSource || undefined);
+  
+  // If we reach here, the fetch was successful (fetchWorldState throws on error).
+  console.log(`[push] worldstate fetch successful, version: ${worldState.Version}`);
+
   const rawPayload = JSON.stringify(worldState);
   const sourceVersionRaw = worldState.Version;
   const sourceVersion =
@@ -43,11 +47,10 @@ export async function executeWorldStatePush(
       ? String(sourceVersionRaw)
       : null;
 
-  const translationBootstrap = options.dryRun
-    ? { initialized: false, bootstrappedNow: false, result: null }
-    : await ensureTranslationSyncInitialized(env);
-
   if (!options.dryRun) {
+    // Kick off translation initialization only now that we have a successful fetch
+    const translationBootstrap = await ensureTranslationSyncInitialized(env);
+
     const rawSnapshotKey = await saveRawSnapshot(env.kv, runId, rawPayload);
     const prepareMessage = buildPrepareWorldStateRunMessage({
       runId,
@@ -86,6 +89,9 @@ export async function executeWorldStatePush(
       queuePreview: [prepareMessage],
     };
   }
+
+  // Dry run path
+  const translationBootstrap = { initialized: false, bootstrappedNow: false, result: null };
 
   const analysis = await analyzeWorldStateDiffs(env.kv, worldState, options.force);
   const changed = analysis.changed;

@@ -37,7 +37,9 @@ export async function handlePrepareWorldStateRun(
   const rawPayload = await loadRawSnapshotByKey(env.kv, message.rawSnapshotKey);
 
   if (!rawPayload) {
-    throw new Error(`Missing raw snapshot for run ${message.runId}`);
+    const runMs = Number.parseInt(message.runId.split("-")[0], 10);
+    const timeInfo = !Number.isNaN(runMs) ? ` (created at ${new Date(runMs).toISOString()})` : "";
+    throw new Error(`Missing raw snapshot for run ${message.runId}${timeInfo}. This may happen if the run was pruned while still in queue.`);
   }
 
   const worldState = parseStoredWorldState(rawPayload);
@@ -86,7 +88,9 @@ export async function handleProcessWorldStateRoot(
   const rawPayload = await loadRawSnapshotByKey(env.kv, message.rawSnapshotKey);
 
   if (!rawPayload) {
-    throw new Error(`Missing raw snapshot for run ${message.runId}`);
+    const runMs = Number.parseInt(message.runId.split("-")[0], 10);
+    const timeInfo = !Number.isNaN(runMs) ? ` (created at ${new Date(runMs).toISOString()})` : "";
+    throw new Error(`Missing raw snapshot for run ${message.runId}${timeInfo}. This may happen if the run was pruned while still in queue.`);
   }
 
   const worldState = parseStoredWorldState(rawPayload);

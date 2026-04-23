@@ -39,7 +39,7 @@ export const SQL = {
   // Reads
   // ---------------------------------------------------------------------------
   selectOldRunsBeyondRetention:
-    "SELECT run_id as \"runId\" FROM pipeline_runs ORDER BY fetched_at DESC, run_id DESC OFFSET ?",
+    "SELECT run_id as \"runId\" FROM pipeline_runs WHERE execution_status IN ('completed', 'failed') ORDER BY fetched_at DESC, run_id DESC OFFSET ?",
 
   selectDiffRootKeysByRun:
     "SELECT root_key as \"rootKey\" FROM pipeline_diffs WHERE run_id = ?",

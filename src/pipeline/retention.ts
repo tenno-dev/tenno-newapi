@@ -7,7 +7,7 @@ import {
 import { Bindings, SQLClient } from "../app/types";
 import { SQL } from "../db/sql";
 
-export const MAX_RETAINED_RUNS = 60;
+export const MAX_RETAINED_RUNS = 1000;
 
 async function ensurePipelineRunExecutionColumns(db: SQLClient): Promise<void> {
   const alters = [
@@ -55,8 +55,24 @@ export async function pruneOldRuns(env: Bindings): Promise<void> {
     .bind(MAX_RETAINED_RUNS)
     .all<{ runId: string }>();
 
+  if (oldRuns.results.length === 0) {
+    return;
+  }
+
+  // Safety: don't prune runs from the last 24 hours to match KV TTL
+  const minPruneTime = Date.now() - 24 * 60 * 60 * 1000;
+
   for (const row of oldRuns.results) {
     const runId = row.runId;
+    const runMs = Number.parseInt(runId.split("-")[0], 10);
+
+    if (!Number.isNaN(runMs) && runMs > minPruneTime) {
+      // Skip pruning if the run is too recent, even if it's beyond the count limit
+      continue;
+    }
+
+    console.log(`[retention] pruning old run ${runId}`);
+
     const [diffRows, queueRows] = await Promise.all([
       env.sql
         .prepare(SQL.selectChangedRootKeysByRun)
