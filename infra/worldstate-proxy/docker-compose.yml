@@ -9,23 +9,27 @@ services:
       - SYS_MODULE
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 1.0.0.1
+      - 8.8.4.4
     volumes:
       - ./wireguard/vpn1:/config
       - /lib/modules:/lib/modules:ro
     environment:
-      PUID: "1000"
-      PGID: "1000"
-      TZ: "UTC"
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - MTU=1300
     ports:
       - "9081:8080"
 
   proxy-1:
-    image: caddy:2-alpine
+    build: .
     container_name: proxy-1
     restart: unless-stopped
     network_mode: "service:vpn-1"
-    volumes:
-      - ./Caddyfile-proxy:/etc/caddy/Caddyfile
     depends_on:
       - vpn-1
     environment:
@@ -41,23 +45,27 @@ services:
       - SYS_MODULE
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 1.0.0.1
+      - 8.8.4.4
     volumes:
       - ./wireguard/vpn2:/config
       - /lib/modules:/lib/modules:ro
     environment:
-      PUID: "1000"
-      PGID: "1000"
-      TZ: "UTC"
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - MTU=1300
     ports:
       - "9082:8080"
 
   proxy-2:
-    image: caddy:2-alpine
+    build: .
     container_name: proxy-2
     restart: unless-stopped
     network_mode: "service:vpn-2"
-    volumes:
-      - ./Caddyfile-proxy:/etc/caddy/Caddyfile
     depends_on:
       - vpn-2
     environment:
@@ -73,23 +81,27 @@ services:
       - SYS_MODULE
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 1.0.0.1
+      - 8.8.4.4
     volumes:
       - ./wireguard/vpn3:/config
       - /lib/modules:/lib/modules:ro
     environment:
-      PUID: "1000"
-      PGID: "1000"
-      TZ: "UTC"
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - MTU=1300
     ports:
       - "9083:8080"
 
   proxy-3:
-    image: caddy:2-alpine
+    build: .
     container_name: proxy-3
     restart: unless-stopped
     network_mode: "service:vpn-3"
-    volumes:
-      - ./Caddyfile-proxy:/etc/caddy/Caddyfile
     depends_on:
       - vpn-3
     environment:
@@ -105,23 +117,27 @@ services:
       - SYS_MODULE
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 1.0.0.1
+      - 8.8.4.4
     volumes:
       - ./wireguard/vpn4:/config
       - /lib/modules:/lib/modules:ro
     environment:
-      PUID: "1000"
-      PGID: "1000"
-      TZ: "UTC"
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - MTU=1300
     ports:
       - "9084:8080"
 
   proxy-4:
-    image: caddy:2-alpine
+    build: .
     container_name: proxy-4
     restart: unless-stopped
     network_mode: "service:vpn-4"
-    volumes:
-      - ./Caddyfile-proxy:/etc/caddy/Caddyfile
     depends_on:
       - vpn-4
     environment:
