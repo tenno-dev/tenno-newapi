@@ -419,3 +419,7 @@ run().catch((error) => {
   console.error("[worker] fatal error:", error);
   process.exit(1); // process.exit is standard for CLI apps even in Bun
 });
+
+setInterval(() => {
+  // Keep event loop alive
+}, 60000);
