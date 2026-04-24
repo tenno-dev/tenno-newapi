@@ -9,8 +9,9 @@ import { handleQueueMessage } from "./queue/consumer";
 
 const STREAM_KEY = "worldstate:translate";
 const GROUP_NAME = "workers";
-// Use Bun.env for a pure, unified identity (standard in containerized environments)
-const CONSUMER_NAME = Bun.env.HOSTNAME || Bun.env.USER || Bun.env.USERNAME || "worker";
+// Use a stable identity by default so recovery works across container restarts.
+// For multiple workers, set WORKER_ID in docker-compose.yml
+const CONSUMER_NAME = Bun.env.WORKER_ID || "worker-translate-1";
 const MAX_RETRIES = Number(Bun.env.WORKER_MAX_RETRIES ?? "3");
 const BLOCK_MS = 5000;
 const READ_COUNT = 10;
